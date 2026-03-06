@@ -11,7 +11,6 @@ $result = @()
 
 foreach($id in $IDS){
 
-  # instance info for state + type (matches backend/app shape)
   $inst = aws ec2 describe-instances --instance-ids $id --region $REGION --output json | ConvertFrom-Json
   $state = $inst.Reservations[0].Instances[0].State.Name
   $type  = $inst.Reservations[0].Instances[0].InstanceType
@@ -35,7 +34,7 @@ foreach($id in $IDS){
     --dimensions Name=InstanceId,Value=$id --start-time $START_STR --end-time $END_STR --period 300 --statistics Sum --region $REGION --output json | ConvertFrom-Json
 
 
-  # latest datapoints (sort by Timestamp so you always grab latest)
+  # latest datapoints
   $cpuValue = if($cpu.Datapoints.Count -gt 0){ ($cpu.Datapoints | Sort-Object Timestamp)[-1].Average } else { 0 }
   $netInVal = if($netin.Datapoints.Count -gt 0){ ($netin.Datapoints | Sort-Object Timestamp)[-1].Sum } else { 0 }
   $netOutVal= if($netout.Datapoints.Count -gt 0){ ($netout.Datapoints | Sort-Object Timestamp)[-1].Sum } else { 0 }
@@ -56,7 +55,7 @@ foreach($id in $IDS){
   }
 }
 
-# final output object (matches backend style)
+# final output 
 $out = [PSCustomObject]@{
   timestamp = (Get-Date).ToUniversalTime().ToString("o")
   region    = $REGION
