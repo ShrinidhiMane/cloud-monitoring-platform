@@ -1,0 +1,26 @@
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "description": "\"Backend server\"",
+  "keywords": [
+    "server",
+    "aws",
+    "monitoring",
+    "backend"
+  ],
+  "license": "ISC",
+  "author": "Team-5",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js",
+    "lint":"eslint . --max-warnings=0",
+    "lint:fix": "eslint --fix ."
+  },
+  "dependencies": {
+    "aws-sdk": "^2.1693.0",
+    "cors": "^2.8.6",
+    "express": "^5.2.1"
+  }
+}
