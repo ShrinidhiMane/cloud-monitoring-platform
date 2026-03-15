@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import {
   FlatList,
   Pressable,
@@ -10,13 +10,30 @@ import {
 import { useRouter } from "expo-router";
 
 import { InstanceCard } from "@/components/InstanceCard";
+import type { MonitoringResponse, MonitoringInstance } from "api-client";
+import { apiFetch } from "api-client";
 import { mockInstances } from "@/data/mockInstances";
-import type { InstanceSummary } from "@/types/instances";
 
 export default function InstancesScreen() {
   const router = useRouter();
+  const [, setInstances] = useState<MonitoringInstance[]>([]);
+  const [, setIsError] = useState<boolean>(false);
 
-  const renderItem = ({ item }: { item: InstanceSummary }) => (
+  useEffect(() => {
+    async function loadInstances() {
+      try {
+        const instancesResponse: MonitoringResponse =
+          await apiFetch("/monitoring");
+        setInstances(instancesResponse.instances ?? []);
+        /* eslint-disable-next-line @typescript-eslint/no-unused-vars,no-unused-vars  */
+      } catch (error) {
+        setIsError(true);
+      }
+    }
+    loadInstances();
+  }, []);
+
+  const renderItem = ({ item }: { item: MonitoringInstance }) => (
     <Pressable
       accessibilityRole="button"
       onPress={() =>
@@ -35,7 +52,7 @@ export default function InstancesScreen() {
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.header}>
         <Text style={styles.title}>Instances</Text>
-        <Text style={styles.subtitle}>EC2 name, ID, state, and type</Text>
+        <Text style={styles.subtitle}>EC2 name, IDs, state, and type</Text>
       </View>
 
       <FlatList

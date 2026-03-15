@@ -12,8 +12,8 @@ import { mockInstances } from "@/data/mockInstances";
 import {
   fetchInstanceMonitoring,
   type MonitoringInstance,
-} from "@/services/cloudWatchApi";
-import type { InstanceState } from "@/types/instances";
+  InstanceState,
+} from "api-client";
 
 const STATE_COLORS: Record<InstanceState, { bg: string; text: string }> = {
   pending: { bg: "#FEF3C7", text: "#92400E" },
@@ -43,8 +43,8 @@ export default function InstanceDetailScreen() {
       average: Math.round(total / selectedSeries.length),
       peak: Math.max(...selectedSeries.map((point) => point.value)),
     };
-  }, [selectedSeries, timeRange]);
-  const displayState = monitoring?.state ?? instance.state;
+  }, [selectedSeries]);
+  const displayState: InstanceState = monitoring?.state ?? instance.state;
   const displayType = monitoring?.type ?? instance.type;
   const stateStyle = STATE_COLORS[displayState];
 
@@ -63,7 +63,8 @@ export default function InstanceDetailScreen() {
             setMetricsError("CloudWatch unavailable. Showing mock data.");
           }
         }
-      } catch (error) {
+        /*eslint-disable-next-line @typescript-eslint/no-unused-vars */
+      } catch (_) {
         if (isMounted) {
           setMetricsError("CloudWatch unavailable. Showing mock data.");
           setUseMockData(true);

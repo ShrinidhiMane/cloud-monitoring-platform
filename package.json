@@ -28,21 +28,25 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "lint:api": "npm run lint --workspace=./packages/api-client",
     "lint:webapp": "npm run lint --prefix ./apps/web",
-    "lint": "npm run lint:api && npm run lint:webapp ",
+    "lint:server": "npm run lint --prefix ./aws/backend",
+    "lint": "npm run lint:api && npm run lint:webapp && npm run lint:server && npm run lint:mobile",
     "lint:mobile": "npm run lint --prefix ./apps/mobile",
     "lint:fix-web": "npm run lint:fix --prefix ./apps/web",
     "lint:fix-mobile": "npm run lint:fix --prefix ./apps/mobile",
     "lint:fix-api":"npm run lint:fix --workspace=./packages/api-client",
-    "lint:fix-all":"npm run lint:fix-web && npm run lint:fix-mobile && npm run lint:fix-api",
+    "lint:fix-server":"npm run lint:fix --prefix ./aws/backend",
+    "lint:fix-all":"npm run lint:fix-web && npm run lint:fix-mobile && npm run lint:fix-api && npm run lint:fix-server",
     "install:dep": "npm install && npm run install:web && npm run install:mobile",
     "install:mobile": "npm install --prefix ./apps/mobile",
-    "setup": "npm run install:dep && npm run build --prefix ./packages/api-client",
+    "install:server":"npm install --prefix ./aws/backend",
+    "setup": "npm run install:dep && npm run build --prefix ./packages/api-client && npm run install:server",
     "install:web": "npm install --prefix ./apps/web",
     "web:dev": "npm run dev --prefix ./apps/web",
     "api-client:dev": "npm run dev --prefix ./packages/api-client",
     "mobile:dev":"npm run start --prefix ./apps/mobile",
     "dev:client": "concurrently --kill-others \"npm run api-client:dev\" \"npm run web:dev\"",
-    "dev:mobile": "concurrently --raw --kill-others \"npm run api-client:dev\" \"npm run mobile:dev\""
+    "dev:mobile": "concurrently --raw --kill-others \"npm run api-client:dev\" \"npm run mobile:dev\"",
+    "start:server":"npm run start --prefix ./aws/backend"
   },
   "devDependencies": {
     "concurrently": "^9.2.1",
@@ -53,10 +57,5 @@
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.56.0",
     "@eslint/js": "^10.0.1"
-  },
-  "dependencies": {
-    "aws-sdk": "^2.1693.0",
-    "cors": "^2.8.6",
-    "express": "^5.2.1"
   }
 }
