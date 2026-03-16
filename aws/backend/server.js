@@ -1,6 +1,6 @@
-import express from "express";
-import cors from "cors";
-import AWS from "aws-sdk";
+const express = require("express");
+const cors = require("cors");
+const AWS = require("aws-sdk");
 
 const app = express();
 app.use(cors());
@@ -22,7 +22,7 @@ app.get("/monitoring", async (req, res, next) => {
       .promise();
 
     if (!ec2Data.Reservations.length) {
-      return res.status(200).json({
+      return res.json({
         timestamp: new Date().toISOString(),
         region: AWS.config.region,
         instances: [],
@@ -32,154 +32,131 @@ app.get("/monitoring", async (req, res, next) => {
     for (const reservation of ec2Data.Reservations) {
       for (const instance of reservation.Instances) {
         const instanceId = instance.InstanceId;
-        const state = instance.State.Name;
-        const type = instance.InstanceType;
 
         const endTime = new Date();
         const startTime = new Date(endTime.getTime() - 60 * 60 * 1000);
 
-        const [cpuData, netInData, netOutData, diskReadData, diskWriteData, memoryData] =
-          await Promise.all([
-            cloudwatch
-              .getMetricStatistics({
-                Namespace: "AWS/EC2",
-                MetricName: "CPUUtilization",
-                Dimensions: [{ Name: "InstanceId", Value: instanceId }],
-                StartTime: startTime,
-                EndTime: endTime,
-                Period: 300,
-                Statistics: ["Average"],
-              })
-              .promise(),
+        const [
+          cpuData,
+          netInData,
+          netOutData,
+          diskReadData,
+          diskWriteData,
+          memoryData,
+        ] = await Promise.all([
+          cloudwatch.getMetricStatistics({
+            Namespace: "AWS/EC2",
+            MetricName: "CPUUtilization",
+            Dimensions: [{ Name: "InstanceId", Value: instanceId }],
+            StartTime: startTime,
+            EndTime: endTime,
+            Period: 300,
+            Statistics: ["Average"],
+          }).promise(),
 
-            cloudwatch
-              .getMetricStatistics({
-                Namespace: "AWS/EC2",
-                MetricName: "NetworkIn",
-                Dimensions: [{ Name: "InstanceId", Value: instanceId }],
-                StartTime: startTime,
-                EndTime: endTime,
-                Period: 300,
-                Statistics: ["Sum"],
-              })
-              .promise(),
+          cloudwatch.getMetricStatistics({
+            Namespace: "AWS/EC2",
+            MetricName: "NetworkIn",
+            Dimensions: [{ Name: "InstanceId", Value: instanceId }],
+            StartTime: startTime,
+            EndTime: endTime,
+            Period: 300,
+            Statistics: ["Sum"],
+          }).promise(),
 
-            cloudwatch
-              .getMetricStatistics({
-                Namespace: "AWS/EC2",
-                MetricName: "NetworkOut",
-                Dimensions: [{ Name: "InstanceId", Value: instanceId }],
-                StartTime: startTime,
-                EndTime: endTime,
-                Period: 300,
-                Statistics: ["Sum"],
-              })
-              .promise(),
+          cloudwatch.getMetricStatistics({
+            Namespace: "AWS/EC2",
+            MetricName: "NetworkOut",
+            Dimensions: [{ Name: "InstanceId", Value: instanceId }],
+            StartTime: startTime,
+            EndTime: endTime,
+            Period: 300,
+            Statistics: ["Sum"],
+          }).promise(),
 
-            cloudwatch
-              .getMetricStatistics({
-                Namespace: "AWS/EC2",
-                MetricName: "DiskReadOps",
-                Dimensions: [{ Name: "InstanceId", Value: instanceId }],
-                StartTime: startTime,
-                EndTime: endTime,
-                Period: 300,
-                Statistics: ["Sum"],
-              })
-              .promise(),
+          cloudwatch.getMetricStatistics({
+            Namespace: "AWS/EC2",
+            MetricName: "DiskReadOps",
+            Dimensions: [{ Name: "InstanceId", Value: instanceId }],
+            StartTime: startTime,
+            EndTime: endTime,
+            Period: 300,
+            Statistics: ["Sum"],
+          }).promise(),
 
-            cloudwatch
-              .getMetricStatistics({
-                Namespace: "AWS/EC2",
-                MetricName: "DiskWriteOps",
-                Dimensions: [{ Name: "InstanceId", Value: instanceId }],
-                StartTime: startTime,
-                EndTime: endTime,
-                Period: 300,
-                Statistics: ["Sum"],
-              })
-              .promise(),
+          cloudwatch.getMetricStatistics({
+            Namespace: "AWS/EC2",
+            MetricName: "DiskWriteOps",
+            Dimensions: [{ Name: "InstanceId", Value: instanceId }],
+            StartTime: startTime,
+            EndTime: endTime,
+            Period: 300,
+            Statistics: ["Sum"],
+          }).promise(),
 
-            cloudwatch
-              .getMetricStatistics({
-                Namespace: "CWAgent",
-                MetricName: "mem_used_percent",
-                Dimensions: [{ Name: "InstanceId", Value: instanceId },{ Name: "ImageId", Value: instance.ImageId },{ Name: "InstanceType", Value: instance.InstanceType },],
-                StartTime: startTime,
-                EndTime: endTime,
-                Period: 300,
-                Statistics: ["Average"],
-              })
-              .promise(),
-          ]);
+          cloudwatch.getMetricStatistics({
+            Namespace: "CWAgent",
+            MetricName: "mem_used_percent",
+            Dimensions: [
+              { Name: "InstanceId", Value: instanceId },
+              { Name: "ImageId", Value: instance.ImageId },
+              { Name: "InstanceType", Value: instance.InstanceType },
+            ],
+            StartTime: startTime,
+            EndTime: endTime,
+            Period: 300,
+            Statistics: ["Average"],
+          }).promise(),
+        ]);
 
-        const cpuValue = cpuData.Datapoints.length
-          ? cpuData.Datapoints.at(-1).Average
-          : 0;
-
-        const networkIn = netInData.Datapoints.length
-          ? netInData.Datapoints.at(-1).Sum
-          : 0;
-
-        const networkOut = netOutData.Datapoints.length
-          ? netOutData.Datapoints.at(-1).Sum
-          : 0;
-
-        const diskRead = diskReadData.Datapoints.length
-          ? diskReadData.Datapoints.at(-1).Sum
-          : 0;
-
-        const diskWrite = diskWriteData.Datapoints.length
-          ? diskWriteData.Datapoints.at(-1).Sum
-          : 0;
-
-         const memoryValue = memoryData.Datapoints.length
-          ? memoryData.Datapoints.at(-1).Average
-          : 0;
-        
+        const getLatest = (data, field) => {
+          if (!data.Datapoints.length) return 0;
+          const sorted = data.Datapoints.sort(
+            (a, b) => new Date(a.Timestamp) - new Date(b.Timestamp)
+          );
+          return sorted.at(-1)[field] || 0;
+        };
 
         result.push({
           instanceId,
-          state,
-          type,
+          state: instance.State.Name,
+          type: instance.InstanceType,
           metrics: {
-            cpuUtilization: Number(cpuValue.toFixed(2)),
-            memoryUtilization: Number(memoryValue.toFixed(2)),
-            networkInBytes: networkIn,
-            networkOutBytes: networkOut,
-            diskReadOps: diskRead,
-            diskWriteOps: diskWrite,
+            cpuUtilization: Number(getLatest(cpuData, "Average").toFixed(2)),
+            memoryUtilization: Number(getLatest(memoryData, "Average").toFixed(2)),
+            networkInBytes: getLatest(netInData, "Sum"),
+            networkOutBytes: getLatest(netOutData, "Sum"),
+            diskReadOps: getLatest(diskReadData, "Sum"),
+            diskWriteOps: getLatest(diskWriteData, "Sum"),
           },
         });
       }
     }
 
-    res.status(200).json({
+    res.json({
       timestamp: new Date().toISOString(),
       region: AWS.config.region,
       instances: result,
     });
+
   } catch (error) {
     next(error);
   }
 });
 
 app.use((req, res) => {
-  res.status(404).json({
-    error: "Route not found",
-  });
+  res.status(404).json({ error: "Route not found" });
 });
 
-app.use((err, req, res) => {
+app.use((err, req, res, next) => {
   res.status(500).json({
     error: "Internal Server Error",
     message: err.message,
   });
 });
 
-const PORT = 4000;
+const PORT = 5000;
 
-app.listen(PORT, () => {
-  /* eslint-disable-next-line no-undef, no-console */
-  console.log(`Server running on http://localhost:${PORT}`);
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Server running on port ${PORT}`);
 });
