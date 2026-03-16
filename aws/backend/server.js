@@ -38,7 +38,7 @@ app.get("/monitoring", async (req, res, next) => {
         const endTime = new Date();
         const startTime = new Date(endTime.getTime() - 60 * 60 * 1000);
 
-        const [cpuData, netInData, netOutData, diskReadData, diskWriteData] =
+        const [cpuData, netInData, netOutData, diskReadData, diskWriteData, memoryData] =
           await Promise.all([
             cloudwatch
               .getMetricStatistics({
@@ -99,6 +99,18 @@ app.get("/monitoring", async (req, res, next) => {
                 Statistics: ["Sum"],
               })
               .promise(),
+
+            cloudwatch
+              .getMetricStatistics({
+                Namespace: "CWAgent",
+                MetricName: "mem_used_percent",
+                Dimensions: [{ Name: "InstanceId", Value: instanceId },{ Name: "ImageId", Value: instance.ImageId },{ Name: "InstanceType", Value: instance.InstanceType },],
+                StartTime: startTime,
+                EndTime: endTime,
+                Period: 300,
+                Statistics: ["Average"],
+              })
+              .promise(),
           ]);
 
         const cpuValue = cpuData.Datapoints.length
@@ -121,12 +133,18 @@ app.get("/monitoring", async (req, res, next) => {
           ? diskWriteData.Datapoints.at(-1).Sum
           : 0;
 
+         const memoryValue = memoryData.Datapoints.length
+          ? memoryData.Datapoints.at(-1).Average
+          : 0;
+        
+
         result.push({
           instanceId,
           state,
           type,
           metrics: {
             cpuUtilization: Number(cpuValue.toFixed(2)),
+            memoryUtilization: Number(memoryValue.toFixed(2)),
             networkInBytes: networkIn,
             networkOutBytes: networkOut,
             diskReadOps: diskRead,
