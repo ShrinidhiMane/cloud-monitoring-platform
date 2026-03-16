@@ -13,19 +13,21 @@ export interface InstanceSummary {
   type: string;
 }
 
-export interface MonitoringInstance {
-  id: string;
-  state: InstanceState;
-  type: string;
-  cpuPercent: number;
+export interface MonitoringMetrics {
+  cpuUtilization: number;
+  memoryUtilization: number;
   networkInBytes: number;
   networkOutBytes: number;
   diskReadOps: number;
   diskWriteOps: number;
 }
 
+export interface MonitoringInstance extends InstanceSummary {
+  metrics: MonitoringMetrics;
+}
+
 export interface MonitoringResponse {
   instances: MonitoringInstance[];
   region: string;
-  timestamp: Date;
+  timestamp: string;
 }

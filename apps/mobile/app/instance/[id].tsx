@@ -1,8 +1,16 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+import {
+  ActivityIndicator,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { useLocalSearchParams } from "expo-router";
 
 import { CpuUsageChart } from "@/components/CpuUsageChart";
+import { InstanceMetricsGrid } from "@/components/InstanceMetricsGrid";
+import { StatusBanner } from "@/components/StatusBanner";
 import {
   TimeRangeSelector,
   type TimeRangeOption,
@@ -11,9 +19,10 @@ import { mockCpuSeries } from "@/data/mockCpuSeries";
 import { mockInstances } from "@/data/mockInstances";
 import {
   fetchInstanceMonitoring,
+  type InstanceState,
   type MonitoringInstance,
-  InstanceState,
-} from "api-client";
+  type MonitoringMetrics,
+} from "@/services/apiClient";
 
 const STATE_COLORS: Record<InstanceState, { bg: string; text: string }> = {
   pending: { bg: "#FEF3C7", text: "#92400E" },
@@ -24,128 +33,238 @@ const STATE_COLORS: Record<InstanceState, { bg: string; text: string }> = {
   terminated: { bg: "#F3F4F6", text: "#6B7280" },
 };
 
+const EMPTY_METRICS: MonitoringMetrics = {
+  cpuUtilization: 0,
+  memoryUtilization: 0,
+  networkInBytes: 0,
+  networkOutBytes: 0,
+  diskReadOps: 0,
+  diskWriteOps: 0,
+};
+
+const VALID_STATES: InstanceState[] = [
+  "pending",
+  "running",
+  "stopping",
+  "stopped",
+  "shutting-down",
+  "terminated",
+];
+
 export default function InstanceDetailScreen() {
-  const params = useLocalSearchParams<{ id?: string }>();
-  const instanceId = Array.isArray(params.id) ? params.id[0] : params.id;
-  const instance =
-    mockInstances.find((item) => item.id === instanceId) ?? mockInstances[0];
+  const params = useLocalSearchParams<{
+    id?: string | string[];
+    name?: string | string[];
+    state?: string | string[];
+    type?: string | string[];
+  }>();
+
+  const instanceId = getParamValue(params.id);
+  const routeName = getParamValue(params.name);
+  const routeState = getParamValue(params.state);
+  const routeType = getParamValue(params.type);
 
   const [timeRange, setTimeRange] = useState<TimeRangeOption>("1h");
   const [monitoring, setMonitoring] = useState<MonitoringInstance | null>(null);
-  const [isLoadingMetrics, setIsLoadingMetrics] = useState(false);
-  const [metricsError, setMetricsError] = useState<string | null>(null);
-  const [useMockData, setUseMockData] = useState(false);
+  const [isLoadingMetrics, setIsLoadingMetrics] = useState(true);
+  const [isUsingMockData, setIsUsingMockData] = useState(false);
+  const [mockReason, setMockReason] = useState<string | null>(null);
 
-  const selectedSeries = mockCpuSeries;
-  const { average, peak } = useMemo(() => {
-    const total = selectedSeries.reduce((sum, point) => sum + point.value, 0);
-    return {
-      average: Math.round(total / selectedSeries.length),
-      peak: Math.max(...selectedSeries.map((point) => point.value)),
-    };
-  }, [selectedSeries]);
-  const displayState: InstanceState = monitoring?.state ?? instance.state;
-  const displayType = monitoring?.type ?? instance.type;
-  const stateStyle = STATE_COLORS[displayState];
+  const fallbackInstance = useMemo(
+    () =>
+      buildFallbackInstance({
+        id: instanceId,
+        name: routeName,
+        state: routeState,
+        type: routeType,
+      }),
+    [instanceId, routeName, routeState, routeType],
+  );
+
+  const displayInstance = monitoring ?? fallbackInstance;
+  const stateStyle = STATE_COLORS[displayInstance.state];
+  const averageCpu = Math.round(
+    mockCpuSeries.reduce((sum, point) => sum + point.value, 0) /
+      mockCpuSeries.length,
+  );
+  const peakCpu = Math.max(...mockCpuSeries.map((point) => point.value));
 
   useEffect(() => {
     let isMounted = true;
 
-    const loadMetrics = async () => {
+    async function loadInstanceMonitoring() {
       setIsLoadingMetrics(true);
-      setMetricsError(null);
+      setMockReason(null);
+
+      if (!instanceId) {
+        setMonitoring(fallbackInstance);
+        setIsUsingMockData(true);
+        setMockReason(
+          "Mock data is active because no instance id was provided to load live monitoring.",
+        );
+        setIsLoadingMetrics(false);
+        return;
+      }
+
       try {
-        const result = await fetchInstanceMonitoring(instance.id, timeRange);
-        if (isMounted) {
+        const result = await fetchInstanceMonitoring(instanceId, timeRange);
+        if (!isMounted) {
+          return;
+        }
+
+        if (result) {
           setMonitoring(result);
-          setUseMockData(!result);
-          if (!result) {
-            setMetricsError("CloudWatch unavailable. Showing mock data.");
-          }
+          setIsUsingMockData(false);
+        } else {
+          setMonitoring(fallbackInstance);
+          setIsUsingMockData(true);
+          setMockReason(
+            "Mock data is active because this instance was not found in the live monitoring response.",
+          );
         }
-        /*eslint-disable-next-line @typescript-eslint/no-unused-vars */
-      } catch (_) {
-        if (isMounted) {
-          setMetricsError("CloudWatch unavailable. Showing mock data.");
-          setUseMockData(true);
+      } catch {
+        if (!isMounted) {
+          return;
         }
+
+        setMonitoring(fallbackInstance);
+        setIsUsingMockData(true);
+        setMockReason(
+          "Mock data is active because the live monitoring server could not be reached.",
+        );
       } finally {
         if (isMounted) {
           setIsLoadingMetrics(false);
         }
       }
-    };
+    }
 
-    loadMetrics();
+    loadInstanceMonitoring();
 
     return () => {
       isMounted = false;
     };
-  }, [instance.id, timeRange]);
+  }, [instanceId, fallbackInstance, timeRange]);
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.header}>
-        <Text style={styles.title}>{instance.name}</Text>
-        <Text style={styles.subtitle}>{instance.id}</Text>
+        <Text style={styles.title}>{displayInstance.name}</Text>
+        <Text style={styles.subtitle}>{displayInstance.id}</Text>
       </View>
+
+      {isLoadingMetrics && !monitoring && (
+        <View style={styles.loadingPanel}>
+          <ActivityIndicator size="large" color="#2563EB" />
+          <View style={styles.loadingCopy}>
+            <Text style={styles.loadingTitle}>Loading live monitoring</Text>
+            <Text style={styles.loadingSubtitle}>
+              Trying the real AWS metrics service before showing fallback data.
+            </Text>
+          </View>
+        </View>
+      )}
+
+      {isUsingMockData && mockReason && (
+        <StatusBanner title="Mock data" message={mockReason} />
+      )}
 
       <View style={styles.summaryCard}>
         <View style={styles.summaryRow}>
           <Text style={styles.summaryLabel}>State</Text>
           <View
             style={[styles.statePill, { backgroundColor: stateStyle.bg }]}
-            accessibilityLabel={`Instance state ${displayState}`}
+            accessibilityLabel={`Instance state ${displayInstance.state}`}
           >
             <Text style={[styles.stateText, { color: stateStyle.text }]}>
-              {displayState}
+              {displayInstance.state}
             </Text>
           </View>
         </View>
         <View style={styles.summaryRow}>
           <Text style={styles.summaryLabel}>Type</Text>
-          <Text style={styles.summaryValue}>{displayType}</Text>
+          <Text style={styles.summaryValue}>{displayInstance.type}</Text>
         </View>
+        <View style={styles.summaryRow}>
+          <Text style={styles.summaryLabel}>Source</Text>
+          <Text style={styles.summaryValue}>
+            {isUsingMockData ? "Mock fallback" : "Live monitoring"}
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.metricsCard}>
+        <View style={styles.sectionHeader}>
+          <View style={styles.sectionCopy}>
+            <Text style={styles.sectionTitle}>Metrics Snapshot</Text>
+            <Text style={styles.sectionSubtitle}>
+              CPU, memory, network, and disk activity for this instance.
+            </Text>
+          </View>
+          {isLoadingMetrics && monitoring && (
+            <Text style={styles.refreshingText}>Refreshing…</Text>
+          )}
+        </View>
+        <InstanceMetricsGrid metrics={displayInstance.metrics} />
       </View>
 
       <View style={styles.chartCard}>
         <View style={styles.chartHeader}>
-          <View>
-            <Text style={styles.chartTitle}>CPU Utilization</Text>
-            <Text style={styles.chartSubtitle}>
-              Selected range: {timeRange}
+          <View style={styles.sectionCopy}>
+            <Text style={styles.sectionTitle}>CPU Trend Preview</Text>
+            <Text style={styles.sectionSubtitle}>
+              Sample chart data until live history endpoints are added.
             </Text>
-            {monitoring && (
-              <Text style={styles.liveMetric}>
-                Live CPU: {monitoring.cpuPercent}%
-              </Text>
-            )}
-            {isLoadingMetrics && (
-              <Text style={styles.loadingText}>Loading metrics…</Text>
-            )}
-            {useMockData && !isLoadingMetrics && (
-              <Text style={styles.mockText}>Using mock data</Text>
-            )}
-            {metricsError && !useMockData && (
-              <Text style={styles.errorText}>{metricsError}</Text>
-            )}
           </View>
           <View style={styles.chartStats}>
             <View style={styles.statBlock}>
               <Text style={styles.statLabel}>Avg</Text>
-              <Text style={styles.statValue}>{average}%</Text>
+              <Text style={styles.statValue}>{averageCpu}%</Text>
             </View>
             <View style={styles.statBlock}>
               <Text style={styles.statLabel}>Peak</Text>
-              <Text style={styles.statValue}>{peak}%</Text>
+              <Text style={styles.statValue}>{peakCpu}%</Text>
             </View>
           </View>
         </View>
         <TimeRangeSelector value={timeRange} onChange={setTimeRange} />
-        <CpuUsageChart data={selectedSeries} />
+        <CpuUsageChart data={mockCpuSeries} />
       </View>
     </ScrollView>
   );
+}
+
+function getParamValue(value?: string | string[]): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function buildFallbackInstance({
+  id,
+  name,
+  state,
+  type,
+}: {
+  id?: string;
+  name?: string;
+  state?: string;
+  type?: string;
+}): MonitoringInstance {
+  const matchingMock = mockInstances.find((instance) => instance.id === id);
+  if (matchingMock) {
+    return matchingMock;
+  }
+
+  const fallbackState = VALID_STATES.includes(state as InstanceState)
+    ? (state as InstanceState)
+    : "running";
+
+  return {
+    id: id ?? "unknown-instance",
+    name: name?.trim() || id || "Unknown instance",
+    state: fallbackState,
+    type: type ?? "unknown",
+    metrics: EMPTY_METRICS,
+  };
 }
 
 const styles = StyleSheet.create({
@@ -161,13 +280,37 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   title: {
-    fontSize: 24,
-    fontWeight: "700",
+    fontSize: 28,
+    fontWeight: "800",
     color: "#0F172A",
   },
   subtitle: {
     fontSize: 14,
     color: "#64748B",
+  },
+  loadingPanel: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    backgroundColor: "#EFF6FF",
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#BFDBFE",
+    padding: 16,
+  },
+  loadingCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  loadingTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#1D4ED8",
+  },
+  loadingSubtitle: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: "#1E40AF",
   },
   summaryCard: {
     backgroundColor: "#FFFFFF",
@@ -203,6 +346,14 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     textTransform: "capitalize",
   },
+  metricsCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    gap: 14,
+  },
   chartCard: {
     backgroundColor: "#FFFFFF",
     borderRadius: 16,
@@ -211,41 +362,34 @@ const styles = StyleSheet.create({
     borderColor: "#E2E8F0",
     gap: 12,
   },
-  chartHeader: {
+  sectionHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     gap: 12,
   },
-  chartTitle: {
-    fontSize: 16,
+  sectionCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  sectionTitle: {
+    fontSize: 17,
     fontWeight: "700",
     color: "#0F172A",
   },
-  chartSubtitle: {
-    marginTop: 4,
-    fontSize: 12,
-    color: "#64748B",
-  },
-  liveMetric: {
-    marginTop: 8,
+  sectionSubtitle: {
     fontSize: 13,
-    fontWeight: "600",
-    color: "#0F172A",
-  },
-  loadingText: {
-    marginTop: 6,
-    fontSize: 12,
-    color: "#94A3B8",
-  },
-  mockText: {
-    marginTop: 6,
-    fontSize: 12,
+    lineHeight: 19,
     color: "#64748B",
   },
-  errorText: {
-    marginTop: 6,
+  refreshingText: {
     fontSize: 12,
-    color: "#DC2626",
+    fontWeight: "600",
+    color: "#2563EB",
+  },
+  chartHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 12,
   },
   chartStats: {
     flexDirection: "row",
@@ -261,7 +405,7 @@ const styles = StyleSheet.create({
   },
   statValue: {
     fontSize: 14,
-    fontWeight: "600",
+    fontWeight: "700",
     color: "#0F172A",
   },
 });
