@@ -1,5 +1,5 @@
 import { getApiBaseUrl } from "./constants";
-import { MonitoringInstance } from "./types";
+import type { MonitoringInstance, MonitoringResponse } from "./types";
 
 export async function apiFetch<T>(
   path: string,
@@ -15,29 +15,39 @@ export async function apiFetch<T>(
       ...(init.headers || {}),
     },
   });
+
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`HTTP ${res.status}: ${text || res.statusText}`);
   }
-  return (await res.json()) as T;
 
-  // console.log(`Received response: ${res.status} ${res.statusText}`);
+  return (await res.json()) as T;
 }
 
-function buildMonitoringUrl(range?: string): string {
-  const base = getApiBaseUrl().replace(/\/$/, "");
+function buildMonitoringPath(range?: string): string {
   if (!range) {
-    return `${base}/monitoring`;
+    return "/monitoring";
   }
-  return `${base}/monitoring?range=${encodeURIComponent(range)}`;
+
+  return `/monitoring?range=${encodeURIComponent(range)}`;
+}
+
+export async function fetchMonitoring(
+  range?: string,
+): Promise<MonitoringResponse> {
+  return apiFetch<MonitoringResponse>(buildMonitoringPath(range));
 }
 
 export async function fetchInstanceMonitoring(
   instanceId: string,
   range?: string,
 ): Promise<MonitoringInstance | null> {
-  const instances: MonitoringInstance[] = await apiFetch(
-    buildMonitoringUrl(range),
+  const response = await fetchMonitoring(range);
+
+  return (
+    response.instances.find(
+      (instance) =>
+        instance.id === instanceId || instance.instanceId === instanceId,
+    ) ?? null
   );
-  return instances.find((instance) => instance.id === instanceId) ?? null;
 }
