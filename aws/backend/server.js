@@ -32,7 +32,7 @@ function getWindowForRange(range) {
       return { durationMs: 7 * 24 * 60 * 60 * 1000, period: 21600 };
     case "1h":
     default:
-      return { durationMs: 60 * 60 * 1000, period: 300 };
+      return { durationMs: 60 * 60 * 60 * 1000 / 60, period: 300 };
   }
 }
 
@@ -61,17 +61,51 @@ function safeRound(value, digits = 2) {
   return Number(Number(value || 0).toFixed(digits));
 }
 
+function sortDatapoints(datapoints) {
+  return [...(datapoints ?? [])].sort(
+    (a, b) => new Date(a.Timestamp) - new Date(b.Timestamp),
+  );
+}
+
 function getLatestStat(metricResponse, statKey) {
-  const datapoints = metricResponse?.Datapoints ?? [];
-  if (!datapoints.length) {
+  const sorted = sortDatapoints(metricResponse?.Datapoints ?? []);
+  if (!sorted.length) {
     return 0;
   }
 
-  const sorted = [...datapoints].sort(
-    (a, b) => new Date(a.Timestamp) - new Date(b.Timestamp),
-  );
-
   return sorted[sorted.length - 1]?.[statKey] ?? 0;
+}
+
+function formatPointLabel(timestamp, range) {
+  const date = new Date(timestamp);
+
+  if (range === "7d") {
+    return date.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+    });
+  }
+
+  return date.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function mapSeries(metricResponse, statKey, range) {
+  const sorted = sortDatapoints(metricResponse?.Datapoints ?? []);
+
+  return sorted.map((point) => ({
+    timestamp: new Date(point.Timestamp).toISOString(),
+    label: formatPointLabel(point.Timestamp, range),
+    value: safeRound(point[statKey] ?? 0),
+  }));
+}
+
+function getInstanceName(instance) {
+  const tags = instance.Tags ?? [];
+  const nameTag = tags.find((tag) => tag.Key === "Name");
+  return nameTag?.Value || instance.InstanceId;
 }
 
 async function fetchMetric({
@@ -96,7 +130,7 @@ async function fetchMetric({
     .promise();
 }
 
-async function fetchBasicInstanceMetrics(instance, startTime, endTime, period) {
+async function fetchExtendedInstanceMetrics(instance, startTime, endTime, period, range) {
   const instanceId = instance.InstanceId;
   const ec2Dimensions = [{ Name: "InstanceId", Value: instanceId }];
   const memoryDimensions = [
@@ -112,6 +146,7 @@ async function fetchBasicInstanceMetrics(instance, startTime, endTime, period) {
     diskReadData,
     diskWriteData,
     memoryData,
+    statusCheckData,
   ] = await Promise.all([
     fetchMetric({
       namespace: "AWS/EC2",
@@ -167,20 +202,40 @@ async function fetchBasicInstanceMetrics(instance, startTime, endTime, period) {
       period,
       statistics: ["Average"],
     }),
+    fetchMetric({
+      namespace: "AWS/EC2",
+      metricName: "StatusCheckFailed",
+      dimensions: ec2Dimensions,
+      startTime,
+      endTime,
+      period,
+      statistics: ["Maximum"],
+    }),
   ]);
 
   return {
+    id: instanceId,
     instanceId,
+    name: getInstanceName(instance),
     state: instance.State?.Name ?? "unknown",
     type: instance.InstanceType,
-    metrics: {
-      cpuUtilization: safeRound(getLatestStat(cpuData, "Average")),
-      memoryUtilization: safeRound(getLatestStat(memoryData, "Average")),
-      networkInBytes: Math.round(getLatestStat(netInData, "Sum")),
-      networkOutBytes: Math.round(getLatestStat(netOutData, "Sum")),
-      diskReadOps: Math.round(getLatestStat(diskReadData, "Sum")),
-      diskWriteOps: Math.round(getLatestStat(diskWriteData, "Sum")),
-    },
+    availabilityZone: instance.Placement?.AvailabilityZone ?? "unknown",
+    publicIp: instance.PublicIpAddress ?? null,
+    imageId: instance.ImageId ?? null,
+    launchedAt: instance.LaunchTime
+      ? new Date(instance.LaunchTime).toISOString()
+      : null,
+    cpuPercent: safeRound(getLatestStat(cpuData, "Average")),
+    memoryPercent: safeRound(getLatestStat(memoryData, "Average")),
+    networkInBytes: Math.round(getLatestStat(netInData, "Sum")),
+    networkOutBytes: Math.round(getLatestStat(netOutData, "Sum")),
+    diskReadOps: Math.round(getLatestStat(diskReadData, "Sum")),
+    diskWriteOps: Math.round(getLatestStat(diskWriteData, "Sum")),
+    statusCheckFailed: Math.round(getLatestStat(statusCheckData, "Maximum")),
+    cpuSeries: mapSeries(cpuData, "Average", range),
+    memorySeries: mapSeries(memoryData, "Average", range),
+    networkInSeries: mapSeries(netInData, "Sum", range),
+    networkOutSeries: mapSeries(netOutData, "Sum", range),
   };
 }
 
@@ -210,7 +265,7 @@ app.get("/monitoring", async (req, res, next) => {
 
     const instances = await Promise.all(
       allInstances.map((instance) =>
-        fetchBasicInstanceMetrics(instance, startTime, endTime, period),
+        fetchExtendedInstanceMetrics(instance, startTime, endTime, period, range),
       ),
     );
 
