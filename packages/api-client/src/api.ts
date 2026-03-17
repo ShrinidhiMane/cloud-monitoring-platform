@@ -1,5 +1,5 @@
 import { getApiBaseUrl } from "./constants";
-import type { MonitoringInstance, MonitoringResponse } from "./types";
+import { MonitoringInstance, MonitoringResponse } from "./types";
 
 export async function apiFetch<T>(
   path: string,
@@ -24,18 +24,17 @@ export async function apiFetch<T>(
   return (await res.json()) as T;
 }
 
-function buildMonitoringPath(range?: string): string {
+function buildMonitoringUrl(range?: string): string {
   if (!range) {
     return "/monitoring";
   }
-
   return `/monitoring?range=${encodeURIComponent(range)}`;
 }
 
 export async function fetchMonitoring(
   range?: string,
 ): Promise<MonitoringResponse> {
-  return apiFetch<MonitoringResponse>(buildMonitoringPath(range));
+  return apiFetch<MonitoringResponse>(buildMonitoringUrl(range));
 }
 
 export async function fetchInstanceMonitoring(
@@ -43,11 +42,7 @@ export async function fetchInstanceMonitoring(
   range?: string,
 ): Promise<MonitoringInstance | null> {
   const response = await fetchMonitoring(range);
-
   return (
-    response.instances.find(
-      (instance) =>
-        instance.id === instanceId || instance.instanceId === instanceId,
-    ) ?? null
+    response.instances.find((instance) => instance.id === instanceId) ?? null
   );
 }

@@ -31,10 +31,11 @@ function addDirectoriesUnderBuild(dir:string){
     })
 }
 
-const workspaceRootNodeModules:PathLike=path.resolve(__dirname +'../../../node_modules');
-const externalPackgesPath:PathLike = path.resolve(__dirname + '../../../packages');
+const workspaceRootNodeModules:PathLike = path.resolve(__dirname, "../../node_modules");
+const externalPackgesPath:PathLike = path.resolve(__dirname, "../../packages");
 const watchFolders:PathLike[] = []
 const externalPackages:string[] = getDirectories(externalPackgesPath,true);
+const extraNodeModules:Record<string, string> = {};
 
 module.exports =(async ()=>{
     //add external Packages and their dependency to watch folder
@@ -44,6 +45,16 @@ module.exports =(async ()=>{
             watchFolders.push(path.resolve(workspaceRootNodeModules,externalPackage));
         }
         const packageJson = require(path.resolve(externalPackgesPath,externalPackage,"package.json"))
+        const packageEntryPoint:string | undefined =
+          packageJson["react-native"] ?? packageJson.main ?? packageJson.browser;
+        const packageAliasPath = packageEntryPoint
+            ? path.resolve(
+                externalPackgesPath as string,
+                externalPackage,
+                path.dirname(packageEntryPoint),
+            )
+            : path.resolve(externalPackgesPath as string, externalPackage);
+        extraNodeModules[externalPackage] = packageAliasPath;
         const dependencies = packageJson.dependencies;
     
         for(const dependency in dependencies){
@@ -54,13 +65,25 @@ module.exports =(async ()=>{
         }
 
         // //add all files under the build folder 
-        const buildOutputFolder:string[] = (packageJson.main ?? packageJson.browser).split("/");
-        const buildFolderPath:PathLike = path.resolve(externalPackageModulePath,buildOutputFolder[0]);
-        await addDirectoriesUnderBuild(buildFolderPath);
+        if (packageEntryPoint) {
+            const buildOutputFolder:string[] = packageEntryPoint.split("/");
+            const buildFolderPath:PathLike = path.resolve(externalPackageModulePath,buildOutputFolder[0]);
+            if (existsSync(buildFolderPath)) {
+                await addDirectoriesUnderBuild(buildFolderPath);
+            }
+        }
    }
 
     const config ={
-        watchFolders:watchFolders
+        watchFolders:watchFolders,
+        resolver: {
+            extraNodeModules,
+            nodeModulesPaths: [
+                path.resolve(__dirname, "node_modules"),
+                path.resolve(workspaceRootNodeModules as string),
+            ],
+            unstable_enableSymlinks: true,
+        },
         }
    return mergeConfig(defaultConfig,config);
     

@@ -263,11 +263,142 @@ app.get("/monitoring", async (req, res, next) => {
       (reservation) => reservation.Instances ?? [],
     );
 
-    const instances = await Promise.all(
-      allInstances.map((instance) =>
-        fetchExtendedInstanceMetrics(instance, startTime, endTime, period, range),
-      ),
-    );
+    for (const reservation of ec2Data.Reservations) {
+      for (const instance of reservation.Instances) {
+        const instanceId = instance.InstanceId;
+        const name =
+          instance.Tags?.find((tag) => tag.Key === "Name")?.Value ?? instanceId;
+        const state = instance.State.Name;
+        const type = instance.InstanceType;
+
+        const endTime = new Date();
+        const startTime = new Date(endTime.getTime() - 60 * 60 * 1000);
+
+        const [
+          cpuData,
+          netInData,
+          netOutData,
+          diskReadData,
+          diskWriteData,
+          memoryData,
+        ] = await Promise.all([
+          cloudwatch
+            .getMetricStatistics({
+              Namespace: "AWS/EC2",
+              MetricName: "CPUUtilization",
+              Dimensions: [{ Name: "InstanceId", Value: instanceId }],
+              StartTime: startTime,
+              EndTime: endTime,
+              Period: 300,
+              Statistics: ["Average"],
+            })
+            .promise(),
+
+          cloudwatch
+            .getMetricStatistics({
+              Namespace: "AWS/EC2",
+              MetricName: "NetworkIn",
+              Dimensions: [{ Name: "InstanceId", Value: instanceId }],
+              StartTime: startTime,
+              EndTime: endTime,
+              Period: 300,
+              Statistics: ["Sum"],
+            })
+            .promise(),
+
+          cloudwatch
+            .getMetricStatistics({
+              Namespace: "AWS/EC2",
+              MetricName: "NetworkOut",
+              Dimensions: [{ Name: "InstanceId", Value: instanceId }],
+              StartTime: startTime,
+              EndTime: endTime,
+              Period: 300,
+              Statistics: ["Sum"],
+            })
+            .promise(),
+
+          cloudwatch
+            .getMetricStatistics({
+              Namespace: "AWS/EC2",
+              MetricName: "DiskReadOps",
+              Dimensions: [{ Name: "InstanceId", Value: instanceId }],
+              StartTime: startTime,
+              EndTime: endTime,
+              Period: 300,
+              Statistics: ["Sum"],
+            })
+            .promise(),
+
+          cloudwatch
+            .getMetricStatistics({
+              Namespace: "AWS/EC2",
+              MetricName: "DiskWriteOps",
+              Dimensions: [{ Name: "InstanceId", Value: instanceId }],
+              StartTime: startTime,
+              EndTime: endTime,
+              Period: 300,
+              Statistics: ["Sum"],
+            })
+            .promise(),
+
+          cloudwatch
+            .getMetricStatistics({
+              Namespace: "CWAgent",
+              MetricName: "mem_used_percent",
+              Dimensions: [
+                { Name: "InstanceId", Value: instanceId },
+                { Name: "ImageId", Value: instance.ImageId },
+                { Name: "InstanceType", Value: instance.InstanceType },
+              ],
+              StartTime: startTime,
+              EndTime: endTime,
+              Period: 300,
+              Statistics: ["Average"],
+            })
+            .promise(),
+        ]);
+
+        const cpuValue = cpuData.Datapoints.length
+          ? cpuData.Datapoints.at(-1).Average
+          : 0;
+
+        const networkIn = netInData.Datapoints.length
+          ? netInData.Datapoints.at(-1).Sum
+          : 0;
+
+        const networkOut = netOutData.Datapoints.length
+          ? netOutData.Datapoints.at(-1).Sum
+          : 0;
+
+        const diskRead = diskReadData.Datapoints.length
+          ? diskReadData.Datapoints.at(-1).Sum
+          : 0;
+
+        const diskWrite = diskWriteData.Datapoints.length
+          ? diskWriteData.Datapoints.at(-1).Sum
+          : 0;
+
+        const memoryValue = memoryData.Datapoints.length
+          ? memoryData.Datapoints.at(-1).Average
+          : 0;
+
+        result.push({
+          id: instanceId,
+          name,
+          state,
+          type,
+          metrics: {
+            cpuUtilization: Number(cpuValue.toFixed(2)),
+            memoryUtilization: Number(memoryValue.toFixed(2)),
+            networkInBytes: networkIn,
+            networkOutBytes: networkOut,
+            diskReadOps: diskRead,
+            diskWriteOps: diskWrite,
+          },
+        });
+      }
+    }
 
     const payload = {
       timestamp: new Date().toISOString(),

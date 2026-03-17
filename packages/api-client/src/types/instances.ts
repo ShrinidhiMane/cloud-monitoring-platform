@@ -18,18 +18,9 @@ export interface InstanceSummary {
   publicIp?: string | null;
 }
 
-export interface MonitoringInstance {
-  id: string;
-  instanceId: string;
-  name: string;
-  state: InstanceState;
-  type: string;
-  availabilityZone: string | null;
-  publicIp: string | null;
-  imageId: string | null;
-  launchedAt: string | null;
-  cpuPercent: number;
-  memoryPercent: number;
+export interface MonitoringMetrics {
+  cpuUtilization: number;
+  memoryUtilization: number;
   networkInBytes: number;
   networkOutBytes: number;
   diskReadOps: number;
@@ -41,9 +32,12 @@ export interface MonitoringInstance {
   networkOutSeries: MetricSeriesPoint[];
 }
 
+export interface MonitoringInstance extends InstanceSummary {
+  metrics: MonitoringMetrics;
+}
+
 export interface MonitoringResponse {
   instances: MonitoringInstance[];
   region: string;
   timestamp: string;
-  range: string;
 }
