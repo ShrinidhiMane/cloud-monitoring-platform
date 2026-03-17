@@ -12,7 +12,7 @@ import { mockInstances } from "@/data/mockInstances";
 import {
   fetchInstanceMonitoring,
   type MonitoringInstance,
-  InstanceState,
+  type InstanceState,
 } from "api-client";
 
 const STATE_COLORS: Record<InstanceState, { bg: string; text: string }> = {
@@ -22,7 +22,15 @@ const STATE_COLORS: Record<InstanceState, { bg: string; text: string }> = {
   stopped: { bg: "#E5E7EB", text: "#374151" },
   "shutting-down": { bg: "#FFE4E6", text: "#9F1239" },
   terminated: { bg: "#F3F4F6", text: "#6B7280" },
+  unknown: { bg: "#E0F2FE", text: "#075985" },
 };
+
+function formatDate(value: string | null | undefined) {
+  if (!value) {
+    return "Not available";
+  }
+  return new Date(value).toLocaleString();
+}
 
 export default function InstanceDetailScreen() {
   const params = useLocalSearchParams<{ id?: string }>();
@@ -36,39 +44,33 @@ export default function InstanceDetailScreen() {
   const [metricsError, setMetricsError] = useState<string | null>(null);
   const [useMockData, setUseMockData] = useState(false);
 
-  const selectedSeries = mockCpuSeries;
-  const { average, peak } = useMemo(() => {
-    const total = selectedSeries.reduce((sum, point) => sum + point.value, 0);
-    return {
-      average: Math.round(total / selectedSeries.length),
-      peak: Math.max(...selectedSeries.map((point) => point.value)),
-    };
-  }, [selectedSeries]);
-  const displayState: InstanceState = monitoring?.state ?? instance.state;
-  const displayType = monitoring?.type ?? instance.type;
-  const stateStyle = STATE_COLORS[displayState];
-
   useEffect(() => {
     let isMounted = true;
 
     const loadMetrics = async () => {
       setIsLoadingMetrics(true);
       setMetricsError(null);
+
       try {
         const result = await fetchInstanceMonitoring(instance.id, timeRange);
-        if (isMounted) {
-          setMonitoring(result);
-          setUseMockData(!result);
-          if (!result) {
-            setMetricsError("CloudWatch unavailable. Showing mock data.");
-          }
+
+        if (!isMounted) {
+          return;
         }
-        /*eslint-disable-next-line @typescript-eslint/no-unused-vars */
-      } catch (_) {
-        if (isMounted) {
+
+        setMonitoring(result);
+        setUseMockData(!result);
+
+        if (!result) {
           setMetricsError("CloudWatch unavailable. Showing mock data.");
-          setUseMockData(true);
         }
+      } catch (_) {
+        if (!isMounted) {
+          return;
+        }
+
+        setMetricsError("CloudWatch unavailable. Showing mock data.");
+        setUseMockData(true);
       } finally {
         if (isMounted) {
           setIsLoadingMetrics(false);
@@ -83,11 +85,29 @@ export default function InstanceDetailScreen() {
     };
   }, [instance.id, timeRange]);
 
+  const selectedSeries =
+    monitoring?.cpuSeries?.length ? monitoring.cpuSeries : mockCpuSeries;
+
+  const { average, peak } = useMemo(() => {
+    const total = selectedSeries.reduce((sum, point) => sum + point.value, 0);
+
+    return {
+      average: Math.round(total / selectedSeries.length),
+      peak: Math.max(...selectedSeries.map((point) => point.value)),
+    };
+  }, [selectedSeries]);
+
+  const displayState: InstanceState = monitoring?.state ?? instance.state;
+  const displayType = monitoring?.type ?? instance.type;
+  const stateStyle = STATE_COLORS[displayState];
+
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.header}>
-        <Text style={styles.title}>{instance.name}</Text>
-        <Text style={styles.subtitle}>{instance.id}</Text>
+        <Text style={styles.title}>{monitoring?.name ?? instance.name}</Text>
+        <Text style={styles.subtitle}>
+          {monitoring?.instanceId ?? instance.id}
+        </Text>
       </View>
 
       <View style={styles.summaryCard}>
@@ -102,34 +122,63 @@ export default function InstanceDetailScreen() {
             </Text>
           </View>
         </View>
+
         <View style={styles.summaryRow}>
           <Text style={styles.summaryLabel}>Type</Text>
           <Text style={styles.summaryValue}>{displayType}</Text>
+        </View>
+
+        <View style={styles.summaryRow}>
+          <Text style={styles.summaryLabel}>Availability Zone</Text>
+          <Text style={styles.summaryValue}>
+            {monitoring?.availabilityZone ?? "N/A"}
+          </Text>
+        </View>
+
+        <View style={styles.summaryRow}>
+          <Text style={styles.summaryLabel}>Launched</Text>
+          <Text style={styles.summaryValue}>
+            {formatDate(monitoring?.launchedAt)}
+          </Text>
         </View>
       </View>
 
       <View style={styles.chartCard}>
         <View style={styles.chartHeader}>
-          <View>
+          <View style={styles.chartInfo}>
             <Text style={styles.chartTitle}>CPU Utilization</Text>
             <Text style={styles.chartSubtitle}>
               Selected range: {timeRange}
             </Text>
-            {monitoring && (
-              <Text style={styles.liveMetric}>
-                Live CPU: {monitoring.cpuPercent}%
-              </Text>
-            )}
-            {isLoadingMetrics && (
+
+            {monitoring ? (
+              <>
+                <Text style={styles.liveMetric}>
+                  Live CPU: {monitoring.cpuPercent}%
+                </Text>
+                <Text style={styles.secondaryMetric}>
+                  Memory: {monitoring.memoryPercent}%
+                </Text>
+                <Text style={styles.secondaryMetric}>
+                  Network In / Out: {monitoring.networkInBytes} /{" "}
+                  {monitoring.networkOutBytes}
+                </Text>
+              </>
+            ) : null}
+
+            {isLoadingMetrics ? (
               <Text style={styles.loadingText}>Loading metrics…</Text>
-            )}
-            {useMockData && !isLoadingMetrics && (
+            ) : null}
+
+            {useMockData && !isLoadingMetrics ? (
               <Text style={styles.mockText}>Using mock data</Text>
-            )}
-            {metricsError && !useMockData && (
+            ) : null}
+
+            {metricsError && !useMockData ? (
               <Text style={styles.errorText}>{metricsError}</Text>
-            )}
+            ) : null}
           </View>
+
           <View style={styles.chartStats}>
             <View style={styles.statBlock}>
               <Text style={styles.statLabel}>Avg</Text>
@@ -141,8 +190,43 @@ export default function InstanceDetailScreen() {
             </View>
           </View>
         </View>
+
         <TimeRangeSelector value={timeRange} onChange={setTimeRange} />
         <CpuUsageChart data={selectedSeries} />
+      </View>
+
+      <View style={styles.chartCard}>
+        <Text style={styles.chartTitle}>Extended Metrics</Text>
+
+        <View style={styles.metricsGrid}>
+          <View style={styles.metricTile}>
+            <Text style={styles.metricTileLabel}>Disk Read Ops</Text>
+            <Text style={styles.metricTileValue}>
+              {monitoring?.diskReadOps ?? 0}
+            </Text>
+          </View>
+
+          <View style={styles.metricTile}>
+            <Text style={styles.metricTileLabel}>Disk Write Ops</Text>
+            <Text style={styles.metricTileValue}>
+              {monitoring?.diskWriteOps ?? 0}
+            </Text>
+          </View>
+
+          <View style={styles.metricTile}>
+            <Text style={styles.metricTileLabel}>Status Check Failed</Text>
+            <Text style={styles.metricTileValue}>
+              {monitoring?.statusCheckFailed ?? 0}
+            </Text>
+          </View>
+
+          <View style={styles.metricTile}>
+            <Text style={styles.metricTileLabel}>Public IP</Text>
+            <Text style={styles.metricTileValue}>
+              {monitoring?.publicIp ?? "Private"}
+            </Text>
+          </View>
+        </View>
       </View>
     </ScrollView>
   );
@@ -181,17 +265,21 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     marginBottom: 10,
+    gap: 12,
   },
   summaryLabel: {
+    flex: 1,
     fontSize: 12,
     color: "#64748B",
     textTransform: "uppercase",
     letterSpacing: 0.6,
   },
   summaryValue: {
+    flex: 1,
     fontSize: 14,
     color: "#0F172A",
     fontWeight: "600",
+    textAlign: "right",
   },
   statePill: {
     paddingHorizontal: 10,
@@ -216,6 +304,9 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     gap: 12,
   },
+  chartInfo: {
+    flex: 1,
+  },
   chartTitle: {
     fontSize: 16,
     fontWeight: "700",
@@ -231,6 +322,11 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "600",
     color: "#0F172A",
+  },
+  secondaryMetric: {
+    marginTop: 4,
+    fontSize: 12,
+    color: "#334155",
   },
   loadingText: {
     marginTop: 6,
@@ -260,6 +356,30 @@ const styles = StyleSheet.create({
     color: "#94A3B8",
   },
   statValue: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#0F172A",
+  },
+  metricsGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 12,
+  },
+  metricTile: {
+    width: "47%",
+    backgroundColor: "#F8FAFC",
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  metricTileLabel: {
+    fontSize: 11,
+    textTransform: "uppercase",
+    color: "#64748B",
+    marginBottom: 6,
+  },
+  metricTileValue: {
     fontSize: 14,
     fontWeight: "600",
     color: "#0F172A",
