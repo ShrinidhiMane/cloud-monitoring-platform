@@ -31,6 +31,7 @@ const STATE_COLORS: Record<InstanceState, { bg: string; text: string }> = {
   stopped: { bg: "#E5E7EB", text: "#374151" },
   "shutting-down": { bg: "#FFE4E6", text: "#9F1239" },
   terminated: { bg: "#F3F4F6", text: "#6B7280" },
+  unknown: { bg: "#E0F2FE", text: "#075985" },
 };
 
 const EMPTY_METRICS: MonitoringMetrics = {
@@ -146,6 +147,22 @@ export default function InstanceDetailScreen() {
     };
   }, [instanceId, fallbackInstance, timeRange]);
 
+  const selectedSeries =
+    monitoring?.cpuSeries?.length ? monitoring.cpuSeries : mockCpuSeries;
+
+  const { average, peak } = useMemo(() => {
+    const total = selectedSeries.reduce((sum, point) => sum + point.value, 0);
+
+    return {
+      average: Math.round(total / selectedSeries.length),
+      peak: Math.max(...selectedSeries.map((point) => point.value)),
+    };
+  }, [selectedSeries]);
+
+  const displayState: InstanceState = monitoring?.state ?? instance.state;
+  const displayType = monitoring?.type ?? instance.type;
+  const stateStyle = STATE_COLORS[displayState];
+
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.header}>
@@ -181,6 +198,7 @@ export default function InstanceDetailScreen() {
             </Text>
           </View>
         </View>
+
         <View style={styles.summaryRow}>
           <Text style={styles.summaryLabel}>Type</Text>
           <Text style={styles.summaryValue}>{displayInstance.type}</Text>
@@ -216,6 +234,7 @@ export default function InstanceDetailScreen() {
               Sample chart data until live history endpoints are added.
             </Text>
           </View>
+
           <View style={styles.chartStats}>
             <View style={styles.statBlock}>
               <Text style={styles.statLabel}>Avg</Text>
@@ -227,8 +246,43 @@ export default function InstanceDetailScreen() {
             </View>
           </View>
         </View>
+
         <TimeRangeSelector value={timeRange} onChange={setTimeRange} />
         <CpuUsageChart data={mockCpuSeries} />
+      </View>
+
+      <View style={styles.chartCard}>
+        <Text style={styles.chartTitle}>Extended Metrics</Text>
+
+        <View style={styles.metricsGrid}>
+          <View style={styles.metricTile}>
+            <Text style={styles.metricTileLabel}>Disk Read Ops</Text>
+            <Text style={styles.metricTileValue}>
+              {monitoring?.diskReadOps ?? 0}
+            </Text>
+          </View>
+
+          <View style={styles.metricTile}>
+            <Text style={styles.metricTileLabel}>Disk Write Ops</Text>
+            <Text style={styles.metricTileValue}>
+              {monitoring?.diskWriteOps ?? 0}
+            </Text>
+          </View>
+
+          <View style={styles.metricTile}>
+            <Text style={styles.metricTileLabel}>Status Check Failed</Text>
+            <Text style={styles.metricTileValue}>
+              {monitoring?.statusCheckFailed ?? 0}
+            </Text>
+          </View>
+
+          <View style={styles.metricTile}>
+            <Text style={styles.metricTileLabel}>Public IP</Text>
+            <Text style={styles.metricTileValue}>
+              {monitoring?.publicIp ?? "Private"}
+            </Text>
+          </View>
+        </View>
       </View>
     </ScrollView>
   );
@@ -324,17 +378,21 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     marginBottom: 10,
+    gap: 12,
   },
   summaryLabel: {
+    flex: 1,
     fontSize: 12,
     color: "#64748B",
     textTransform: "uppercase",
     letterSpacing: 0.6,
   },
   summaryValue: {
+    flex: 1,
     fontSize: 14,
     color: "#0F172A",
     fontWeight: "600",
+    textAlign: "right",
   },
   statePill: {
     paddingHorizontal: 10,
@@ -406,6 +464,30 @@ const styles = StyleSheet.create({
   statValue: {
     fontSize: 14,
     fontWeight: "700",
+    color: "#0F172A",
+  },
+  metricsGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 12,
+  },
+  metricTile: {
+    width: "47%",
+    backgroundColor: "#F8FAFC",
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  metricTileLabel: {
+    fontSize: 11,
+    textTransform: "uppercase",
+    color: "#64748B",
+    marginBottom: 6,
+  },
+  metricTileValue: {
+    fontSize: 14,
+    fontWeight: "600",
     color: "#0F172A",
   },
 });

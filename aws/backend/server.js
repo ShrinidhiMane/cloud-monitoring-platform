@@ -1,6 +1,6 @@
-import express from "express";
-import cors from "cors";
-import AWS from "aws-sdk";
+const express = require("express");
+const cors = require("cors");
+const AWS = require("aws-sdk");
 
 const app = express();
 app.use(cors());
@@ -11,9 +11,247 @@ AWS.config.update({ region: "us-east-2" });
 const ec2 = new AWS.EC2();
 const cloudwatch = new AWS.CloudWatch();
 
+const PORT = 5000;
+const CACHE_TTL_MS = 30 * 1000;
+const monitoringCache = new Map();
+
+function normalizeRange(range) {
+  const allowedRanges = new Set(["1h", "6h", "12h", "24h", "7d"]);
+  return allowedRanges.has(range) ? range : "1h";
+}
+
+function getWindowForRange(range) {
+  switch (range) {
+    case "6h":
+      return { durationMs: 6 * 60 * 60 * 1000, period: 900 };
+    case "12h":
+      return { durationMs: 12 * 60 * 60 * 1000, period: 1800 };
+    case "24h":
+      return { durationMs: 24 * 60 * 60 * 1000, period: 3600 };
+    case "7d":
+      return { durationMs: 7 * 24 * 60 * 60 * 1000, period: 21600 };
+    case "1h":
+    default:
+      return { durationMs: 60 * 60 * 60 * 1000 / 60, period: 300 };
+  }
+}
+
+function getCacheEntry(key) {
+  const entry = monitoringCache.get(key);
+  if (!entry) {
+    return null;
+  }
+
+  if (Date.now() - entry.createdAt > CACHE_TTL_MS) {
+    monitoringCache.delete(key);
+    return null;
+  }
+
+  return entry.payload;
+}
+
+function setCacheEntry(key, payload) {
+  monitoringCache.set(key, {
+    createdAt: Date.now(),
+    payload,
+  });
+}
+
+function safeRound(value, digits = 2) {
+  return Number(Number(value || 0).toFixed(digits));
+}
+
+function sortDatapoints(datapoints) {
+  return [...(datapoints ?? [])].sort(
+    (a, b) => new Date(a.Timestamp) - new Date(b.Timestamp),
+  );
+}
+
+function getLatestStat(metricResponse, statKey) {
+  const sorted = sortDatapoints(metricResponse?.Datapoints ?? []);
+  if (!sorted.length) {
+    return 0;
+  }
+
+  return sorted[sorted.length - 1]?.[statKey] ?? 0;
+}
+
+function formatPointLabel(timestamp, range) {
+  const date = new Date(timestamp);
+
+  if (range === "7d") {
+    return date.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+    });
+  }
+
+  return date.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function mapSeries(metricResponse, statKey, range) {
+  const sorted = sortDatapoints(metricResponse?.Datapoints ?? []);
+
+  return sorted.map((point) => ({
+    timestamp: new Date(point.Timestamp).toISOString(),
+    label: formatPointLabel(point.Timestamp, range),
+    value: safeRound(point[statKey] ?? 0),
+  }));
+}
+
+function getInstanceName(instance) {
+  const tags = instance.Tags ?? [];
+  const nameTag = tags.find((tag) => tag.Key === "Name");
+  return nameTag?.Value || instance.InstanceId;
+}
+
+async function fetchMetric({
+  namespace,
+  metricName,
+  dimensions,
+  startTime,
+  endTime,
+  period,
+  statistics,
+}) {
+  return cloudwatch
+    .getMetricStatistics({
+      Namespace: namespace,
+      MetricName: metricName,
+      Dimensions: dimensions,
+      StartTime: startTime,
+      EndTime: endTime,
+      Period: period,
+      Statistics: statistics,
+    })
+    .promise();
+}
+
+async function fetchExtendedInstanceMetrics(instance, startTime, endTime, period, range) {
+  const instanceId = instance.InstanceId;
+  const ec2Dimensions = [{ Name: "InstanceId", Value: instanceId }];
+  const memoryDimensions = [
+    { Name: "InstanceId", Value: instanceId },
+    { Name: "ImageId", Value: instance.ImageId },
+    { Name: "InstanceType", Value: instance.InstanceType },
+  ];
+
+  const [
+    cpuData,
+    netInData,
+    netOutData,
+    diskReadData,
+    diskWriteData,
+    memoryData,
+    statusCheckData,
+  ] = await Promise.all([
+    fetchMetric({
+      namespace: "AWS/EC2",
+      metricName: "CPUUtilization",
+      dimensions: ec2Dimensions,
+      startTime,
+      endTime,
+      period,
+      statistics: ["Average"],
+    }),
+    fetchMetric({
+      namespace: "AWS/EC2",
+      metricName: "NetworkIn",
+      dimensions: ec2Dimensions,
+      startTime,
+      endTime,
+      period,
+      statistics: ["Sum"],
+    }),
+    fetchMetric({
+      namespace: "AWS/EC2",
+      metricName: "NetworkOut",
+      dimensions: ec2Dimensions,
+      startTime,
+      endTime,
+      period,
+      statistics: ["Sum"],
+    }),
+    fetchMetric({
+      namespace: "AWS/EC2",
+      metricName: "DiskReadOps",
+      dimensions: ec2Dimensions,
+      startTime,
+      endTime,
+      period,
+      statistics: ["Sum"],
+    }),
+    fetchMetric({
+      namespace: "AWS/EC2",
+      metricName: "DiskWriteOps",
+      dimensions: ec2Dimensions,
+      startTime,
+      endTime,
+      period,
+      statistics: ["Sum"],
+    }),
+    fetchMetric({
+      namespace: "CWAgent",
+      metricName: "mem_used_percent",
+      dimensions: memoryDimensions,
+      startTime,
+      endTime,
+      period,
+      statistics: ["Average"],
+    }),
+    fetchMetric({
+      namespace: "AWS/EC2",
+      metricName: "StatusCheckFailed",
+      dimensions: ec2Dimensions,
+      startTime,
+      endTime,
+      period,
+      statistics: ["Maximum"],
+    }),
+  ]);
+
+  return {
+    id: instanceId,
+    instanceId,
+    name: getInstanceName(instance),
+    state: instance.State?.Name ?? "unknown",
+    type: instance.InstanceType,
+    availabilityZone: instance.Placement?.AvailabilityZone ?? "unknown",
+    publicIp: instance.PublicIpAddress ?? null,
+    imageId: instance.ImageId ?? null,
+    launchedAt: instance.LaunchTime
+      ? new Date(instance.LaunchTime).toISOString()
+      : null,
+    cpuPercent: safeRound(getLatestStat(cpuData, "Average")),
+    memoryPercent: safeRound(getLatestStat(memoryData, "Average")),
+    networkInBytes: Math.round(getLatestStat(netInData, "Sum")),
+    networkOutBytes: Math.round(getLatestStat(netOutData, "Sum")),
+    diskReadOps: Math.round(getLatestStat(diskReadData, "Sum")),
+    diskWriteOps: Math.round(getLatestStat(diskWriteData, "Sum")),
+    statusCheckFailed: Math.round(getLatestStat(statusCheckData, "Maximum")),
+    cpuSeries: mapSeries(cpuData, "Average", range),
+    memorySeries: mapSeries(memoryData, "Average", range),
+    networkInSeries: mapSeries(netInData, "Sum", range),
+    networkOutSeries: mapSeries(netOutData, "Sum", range),
+  };
+}
+
 app.get("/monitoring", async (req, res, next) => {
   try {
-    const result = [];
+    const range = normalizeRange(req.query.range);
+    const cacheKey = `monitoring:${range}`;
+    const cachedPayload = getCacheEntry(cacheKey);
+
+    if (cachedPayload) {
+      return res.json(cachedPayload);
+    }
+
+    const { durationMs, period } = getWindowForRange(range);
+    const endTime = new Date();
+    const startTime = new Date(endTime.getTime() - durationMs);
 
     const ec2Data = await ec2
       .describeInstances({
@@ -21,13 +259,9 @@ app.get("/monitoring", async (req, res, next) => {
       })
       .promise();
 
-    if (!ec2Data.Reservations.length) {
-      return res.status(200).json({
-        timestamp: new Date().toISOString(),
-        region: AWS.config.region,
-        instances: [],
-      });
-    }
+    const allInstances = (ec2Data.Reservations ?? []).flatMap(
+      (reservation) => reservation.Instances ?? [],
+    );
 
     for (const reservation of ec2Data.Reservations) {
       for (const instance of reservation.Instances) {
@@ -166,32 +400,31 @@ app.get("/monitoring", async (req, res, next) => {
       }
     }
 
-    res.status(200).json({
+    const payload = {
       timestamp: new Date().toISOString(),
       region: AWS.config.region,
-      instances: result,
-    });
+      range,
+      instances,
+    };
+
+    setCacheEntry(cacheKey, payload);
+    return res.json(payload);
   } catch (error) {
-    next(error);
+    return next(error);
   }
 });
 
 app.use((req, res) => {
-  res.status(404).json({
-    error: "Route not found",
-  });
+  res.status(404).json({ error: "Route not found" });
 });
 
-app.use((err, req, res) => {
+app.use((err, req, res, next) => {
   res.status(500).json({
     error: "Internal Server Error",
     message: err.message,
   });
 });
 
-const PORT = 4000;
-
-app.listen(PORT, () => {
-  /* eslint-disable-next-line no-undef, no-console */
-  console.log(`Server running on http://localhost:${PORT}`);
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Server running on port ${PORT}`);
 });
