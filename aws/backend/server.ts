@@ -1,6 +1,12 @@
-const express = require("express");
-const cors = require("cors");
-const AWS = require("aws-sdk");
+import express, { type NextFunction, type Request, type Response } from "express";
+import cors from "cors";
+import AWS, { type CloudWatch, type EC2 } from "aws-sdk";
+import {
+  type InstanceState,
+  type MetricSeriesPoint,
+  type MonitoringInstance,
+  type MonitoringResponse,
+} from "api-client";
 
 const app = express();
 app.use(cors());
@@ -13,14 +19,29 @@ const cloudwatch = new AWS.CloudWatch();
 
 const PORT = 5000;
 const CACHE_TTL_MS = 30 * 1000;
-const monitoringCache = new Map();
+const monitoringCache = new Map<string, { createdAt: number; payload: MonitoringResponse }>();
 
-function normalizeRange(range) {
-  const allowedRanges = new Set(["1h", "6h", "12h", "24h", "7d"]);
-  return allowedRanges.has(range) ? range : "1h";
+type MonitoringRange = "1h" | "6h" | "12h" | "24h" | "7d";
+type DatapointStatKey = "Average" | "Sum" | "Maximum";
+type FetchMetricParams = {
+  namespace: string;
+  metricName: string;
+  dimensions: CloudWatch.Dimensions;
+  startTime: Date;
+  endTime: Date;
+  period: number;
+  statistics: CloudWatch.Statistics;
+};
+
+function normalizeRange(range: unknown): MonitoringRange {
+  const allowedRanges: Set<MonitoringRange> = new Set(["1h", "6h", "12h", "24h", "7d"]);
+  if (typeof range !== "string") {
+    return "1h";
+  }
+  return allowedRanges.has(range as MonitoringRange) ? (range as MonitoringRange) : "1h";
 }
 
-function getWindowForRange(range) {
+function getWindowForRange(range: MonitoringRange): { durationMs: number; period: number } {
   switch (range) {
     case "6h":
       return { durationMs: 6 * 60 * 60 * 1000, period: 900 };
@@ -36,7 +57,7 @@ function getWindowForRange(range) {
   }
 }
 
-function getCacheEntry(key) {
+function getCacheEntry(key: string): MonitoringResponse | null {
   const entry = monitoringCache.get(key);
   if (!entry) {
     return null;
@@ -50,34 +71,39 @@ function getCacheEntry(key) {
   return entry.payload;
 }
 
-function setCacheEntry(key, payload) {
+function setCacheEntry(key: string, payload: MonitoringResponse): void {
   monitoringCache.set(key, {
     createdAt: Date.now(),
     payload,
   });
 }
 
-function safeRound(value, digits = 2) {
-  return Number(Number(value || 0).toFixed(digits));
+function safeRound(value: number | undefined, digits = 2): number {
+  return Number(Number(value ?? 0).toFixed(digits));
 }
 
-function sortDatapoints(datapoints) {
+function sortDatapoints(datapoints: CloudWatch.Datapoints | undefined): CloudWatch.Datapoints {
   return [...(datapoints ?? [])].sort(
-    (a, b) => new Date(a.Timestamp) - new Date(b.Timestamp),
+    (a, b) =>
+      new Date(a.Timestamp ?? 0).getTime() -
+      new Date(b.Timestamp ?? 0).getTime(),
   );
 }
 
-function getLatestStat(metricResponse, statKey) {
+function getLatestStat(
+  metricResponse: CloudWatch.GetMetricStatisticsOutput,
+  statKey: DatapointStatKey,
+): number {
   const sorted = sortDatapoints(metricResponse?.Datapoints ?? []);
   if (!sorted.length) {
     return 0;
   }
 
-  return sorted[sorted.length - 1]?.[statKey] ?? 0;
+  return Number(sorted[sorted.length - 1]?.[statKey] ?? 0);
 }
 
-function formatPointLabel(timestamp, range) {
-  const date = new Date(timestamp);
+function formatPointLabel(timestamp: Date | string | undefined, range: MonitoringRange): string {
+  const date = new Date(timestamp ?? 0);
 
   if (range === "7d") {
     return date.toLocaleDateString("en-US", {
@@ -92,20 +118,24 @@ function formatPointLabel(timestamp, range) {
   });
 }
 
-function mapSeries(metricResponse, statKey, range) {
+function mapSeries(
+  metricResponse: CloudWatch.GetMetricStatisticsOutput,
+  statKey: DatapointStatKey,
+  range: MonitoringRange,
+): MetricSeriesPoint[] {
   const sorted = sortDatapoints(metricResponse?.Datapoints ?? []);
 
-  return sorted.map((point) => ({
-    timestamp: new Date(point.Timestamp).toISOString(),
+  return sorted.map((point: CloudWatch.Datapoint) => ({
+    timestamp: new Date(point.Timestamp ?? 0).toISOString(),
     label: formatPointLabel(point.Timestamp, range),
-    value: safeRound(point[statKey] ?? 0),
+    value: safeRound(Number(point[statKey] ?? 0)),
   }));
 }
 
-function getInstanceName(instance) {
+function getInstanceName(instance: EC2.Instance): string {
   const tags = instance.Tags ?? [];
-  const nameTag = tags.find((tag) => tag.Key === "Name");
-  return nameTag?.Value || instance.InstanceId;
+  const nameTag = tags.find((tag: EC2.Tag) => tag.Key === "Name");
+  return nameTag?.Value || instance.InstanceId || "unknown-instance";
 }
 
 async function fetchMetric({
@@ -116,7 +146,7 @@ async function fetchMetric({
   endTime,
   period,
   statistics,
-}) {
+}: FetchMetricParams): Promise<CloudWatch.GetMetricStatisticsOutput> {
   return cloudwatch
     .getMetricStatistics({
       Namespace: namespace,
@@ -130,13 +160,19 @@ async function fetchMetric({
     .promise();
 }
 
-async function fetchExtendedInstanceMetrics(instance, startTime, endTime, period, range) {
-  const instanceId = instance.InstanceId;
-  const ec2Dimensions = [{ Name: "InstanceId", Value: instanceId }];
-  const memoryDimensions = [
+async function fetchExtendedInstanceMetrics(
+  instance: EC2.Instance,
+  startTime: Date,
+  endTime: Date,
+  period: number,
+  range: MonitoringRange,
+): Promise<MonitoringInstance> {
+  const instanceId = instance.InstanceId ?? "unknown-instance";
+  const ec2Dimensions: CloudWatch.Dimensions = [{ Name: "InstanceId", Value: instanceId }];
+  const memoryDimensions: CloudWatch.Dimensions = [
     { Name: "InstanceId", Value: instanceId },
-    { Name: "ImageId", Value: instance.ImageId },
-    { Name: "InstanceType", Value: instance.InstanceType },
+    { Name: "ImageId", Value: instance.ImageId ?? "unknown" },
+    { Name: "InstanceType", Value: instance.InstanceType ?? "unknown" },
   ];
 
   const [
@@ -217,8 +253,8 @@ async function fetchExtendedInstanceMetrics(instance, startTime, endTime, period
     id: instanceId,
     instanceId,
     name: getInstanceName(instance),
-    state: instance.State?.Name ?? "unknown",
-    type: instance.InstanceType,
+    state: (instance.State?.Name as InstanceState) ?? "unknown",
+    type: instance.InstanceType ?? "unknown",
     availabilityZone: instance.Placement?.AvailabilityZone ?? "unknown",
     publicIp: instance.PublicIpAddress ?? null,
     imageId: instance.ImageId ?? null,
@@ -236,10 +272,10 @@ async function fetchExtendedInstanceMetrics(instance, startTime, endTime, period
     memorySeries: mapSeries(memoryData, "Average", range),
     networkInSeries: mapSeries(netInData, "Sum", range),
     networkOutSeries: mapSeries(netOutData, "Sum", range),
-  };
+  } as Partial<MonitoringInstance> as MonitoringInstance;
 }
 
-app.get("/monitoring", async (req, res, next) => {
+app.get("/monitoring", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const range = normalizeRange(req.query.range);
     const cacheKey = `monitoring:${range}`;
@@ -260,16 +296,18 @@ app.get("/monitoring", async (req, res, next) => {
       .promise();
 
     const allInstances = (ec2Data.Reservations ?? []).flatMap(
-      (reservation) => reservation.Instances ?? [],
+      (reservation: EC2.Reservation) => reservation.Instances ?? [],
     );
 
-    for (const reservation of ec2Data.Reservations) {
-      for (const instance of reservation.Instances) {
-        const instanceId = instance.InstanceId;
+    const result: MonitoringInstance[] = [];
+
+    for (const reservation of ec2Data.Reservations ?? []) {
+      for (const instance of reservation.Instances ?? []) {
+        const instanceId = instance.InstanceId ?? "unknown-instance";
         const name =
-          instance.Tags?.find((tag) => tag.Key === "Name")?.Value ?? instanceId;
-        const state = instance.State.Name;
-        const type = instance.InstanceType;
+          instance.Tags?.find((tag: EC2.Tag) => tag.Key === "Name")?.Value ?? instanceId;
+        const state = (instance.State?.Name as InstanceState) ?? "unknown";
+        const type = instance.InstanceType ?? "unknown";
 
         const endTime = new Date();
         const startTime = new Date(endTime.getTime() - 60 * 60 * 1000);
@@ -348,8 +386,8 @@ app.get("/monitoring", async (req, res, next) => {
               MetricName: "mem_used_percent",
               Dimensions: [
                 { Name: "InstanceId", Value: instanceId },
-                { Name: "ImageId", Value: instance.ImageId },
-                { Name: "InstanceType", Value: instance.InstanceType },
+                { Name: "ImageId", Value: instance.ImageId ?? "unknown" },
+                { Name: "InstanceType", Value: instance.InstanceType ?? "unknown" },
               ],
               StartTime: startTime,
               EndTime: endTime,
@@ -359,50 +397,66 @@ app.get("/monitoring", async (req, res, next) => {
             .promise(),
         ]);
 
-        const cpuValue = cpuData.Datapoints.length
-          ? cpuData.Datapoints.at(-1).Average
+        const cpuValue = cpuData.Datapoints?.length
+          ? Number(cpuData.Datapoints.at(-1)?.Average ?? 0)
           : 0;
 
-        const networkIn = netInData.Datapoints.length
-          ? netInData.Datapoints.at(-1).Sum
+        const networkIn = netInData.Datapoints?.length
+          ? Number(netInData.Datapoints.at(-1)?.Sum ?? 0)
           : 0;
 
-        const networkOut = netOutData.Datapoints.length
-          ? netOutData.Datapoints.at(-1).Sum
+        const networkOut = netOutData.Datapoints?.length
+          ? Number(netOutData.Datapoints.at(-1)?.Sum ?? 0)
           : 0;
 
-        const diskRead = diskReadData.Datapoints.length
-          ? diskReadData.Datapoints.at(-1).Sum
+        const diskRead = diskReadData.Datapoints?.length
+          ? Number(diskReadData.Datapoints.at(-1)?.Sum ?? 0)
           : 0;
 
-        const diskWrite = diskWriteData.Datapoints.length
-          ? diskWriteData.Datapoints.at(-1).Sum
+        const diskWrite = diskWriteData.Datapoints?.length
+          ? Number(diskWriteData.Datapoints.at(-1)?.Sum ?? 0)
           : 0;
 
-        const memoryValue = memoryData.Datapoints.length
-          ? memoryData.Datapoints.at(-1).Average
+        const memoryValue = memoryData.Datapoints?.length
+          ? Number(memoryData.Datapoints.at(-1)?.Average ?? 0)
           : 0;
 
         result.push({
           id: instanceId,
+          instanceId,
           name,
           state,
           type,
-          metrics: {
-            cpuUtilization: Number(cpuValue.toFixed(2)),
-            memoryUtilization: Number(memoryValue.toFixed(2)),
-            networkInBytes: networkIn,
-            networkOutBytes: networkOut,
-            diskReadOps: diskRead,
-            diskWriteOps: diskWrite,
-          },
-        });
+          availabilityZone: instance.Placement?.AvailabilityZone ?? "unknown",
+          publicIp: instance.PublicIpAddress ?? null,
+          imageId: instance.ImageId ?? null,
+          launchedAt: instance.LaunchTime ? new Date(instance.LaunchTime).toISOString() : null,
+          cpuPercent: Number(cpuValue.toFixed(2)),
+          memoryPercent: Number(memoryValue.toFixed(2)),
+          networkInBytes: networkIn,
+          networkOutBytes: networkOut,
+          diskReadOps: diskRead,
+          diskWriteOps: diskWrite,
+          statusCheckFailed: 0,
+          cpuSeries: [],
+          memorySeries: [],
+          networkInSeries: [],
+          networkOutSeries: [],
+        } as Partial<MonitoringInstance> as MonitoringInstance);
       }
     }
 
-    const payload = {
+    const instances: MonitoringInstance[] = result.length
+      ? result
+      : await Promise.all(
+          allInstances.map((instance) =>
+            fetchExtendedInstanceMetrics(instance, startTime, endTime, period, range),
+          ),
+        );
+
+    const payload: MonitoringResponse = {
       timestamp: new Date().toISOString(),
-      region: AWS.config.region,
+      region: (AWS.config.region as string) ?? "us-east-2",
       range,
       instances,
     };
@@ -414,11 +468,14 @@ app.get("/monitoring", async (req, res, next) => {
   }
 });
 
-app.use((req, res) => {
+app.use((req: Request, res: Response) => {
+  void req;
   res.status(404).json({ error: "Route not found" });
 });
 
-app.use((err, req, res, next) => {
+app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
+  void req;
+  void next;
   res.status(500).json({
     error: "Internal Server Error",
     message: err.message,
