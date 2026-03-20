@@ -33,9 +33,8 @@
     "lint:mobile": "npm run lint --prefix ./apps/mobile",
     "lint:fix-web": "npm run lint:fix --prefix ./apps/web",
     "lint:fix-mobile": "npm run lint:fix --prefix ./apps/mobile",
-    "lint:fix-api": "npm run lint:fix --workspace=./packages/api-client",
-    "lint:fix-server": "npm run lint:fix --prefix ./aws/backend",
-    "lint:fix-all": "npm run lint:fix-web && npm run lint:fix-mobile && npm run lint:fix-api && npm run lint:fix-server",
+    "lint:fix-api":"npm run lint:fix --workspace=./packages/api-client",
+    "lint:fix-all":"npm run lint:fix-web && npm run lint:fix-mobile && npm run lint:fix-api",
     "install:dep": "npm install && npm run install:web && npm run install:mobile",
     "install:mobile": "npm install --prefix ./apps/mobile",
     "install:server": "npm install --prefix ./aws/backend",
@@ -49,16 +48,18 @@
     "start:server": "npm run start --prefix ./aws/backend"
   },
   "devDependencies": {
-    "@eslint/js": "^10.0.1",
-    "@tsconfig/node22": "^22.0.5",
-    "@types/express": "^5.0.6",
-    "@types/node": "^25.5.0",
     "concurrently": "^9.2.1",
     "eslint": "^10.0.1",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.5",
     "husky": "^9.1.7",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.56.0"
+    "typescript-eslint": "^8.56.0",
+    "@eslint/js": "^10.0.1"
+  },
+  "dependencies": {
+    "aws-sdk": "^2.1693.0",
+    "cors": "^2.8.6",
+    "express": "^5.2.1"
   }
 }
