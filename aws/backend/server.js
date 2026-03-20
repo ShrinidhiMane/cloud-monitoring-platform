@@ -16,7 +16,7 @@ app.get("/monitoring", async (req, res, next) => {
   try {
     console.log("Monitoring endpoint hit");
 
-    const result = [];
+    const instances = [];
 
     const ec2Data = await ec2
       .describeInstances({
@@ -25,11 +25,18 @@ app.get("/monitoring", async (req, res, next) => {
       .promise();
 
     if (!ec2Data.Reservations.length) {
+      const sgData = await ec2.describeSecurityGroups().promise();
+
       return res.status(200).json({
         timestamp: new Date().toISOString(),
         region: AWS.config.region,
         instances: [],
-        s3: []
+        s3: [],
+        security: sgData.SecurityGroups.map(sg => ({
+          groupId: sg.GroupId,
+          groupName: sg.GroupName,
+          description: sg.Description
+        }))
       });
     }
 
@@ -49,65 +56,55 @@ app.get("/monitoring", async (req, res, next) => {
           diskReadData,
           diskWriteData
         ] = await Promise.all([
-          cloudwatch
-            .getMetricStatistics({
-              Namespace: "AWS/EC2",
-              MetricName: "CPUUtilization",
-              Dimensions: [{ Name: "InstanceId", Value: instanceId }],
-              StartTime: startTime,
-              EndTime: endTime,
-              Period: 300,
-              Statistics: ["Average"]
-            })
-            .promise(),
+          cloudwatch.getMetricStatistics({
+            Namespace: "AWS/EC2",
+            MetricName: "CPUUtilization",
+            Dimensions: [{ Name: "InstanceId", Value: instanceId }],
+            StartTime: startTime,
+            EndTime: endTime,
+            Period: 300,
+            Statistics: ["Average"]
+          }).promise(),
 
-          cloudwatch
-            .getMetricStatistics({
-              Namespace: "AWS/EC2",
-              MetricName: "NetworkIn",
-              Dimensions: [{ Name: "InstanceId", Value: instanceId }],
-              StartTime: startTime,
-              EndTime: endTime,
-              Period: 300,
-              Statistics: ["Sum"]
-            })
-            .promise(),
+          cloudwatch.getMetricStatistics({
+            Namespace: "AWS/EC2",
+            MetricName: "NetworkIn",
+            Dimensions: [{ Name: "InstanceId", Value: instanceId }],
+            StartTime: startTime,
+            EndTime: endTime,
+            Period: 300,
+            Statistics: ["Sum"]
+          }).promise(),
 
-          cloudwatch
-            .getMetricStatistics({
-              Namespace: "AWS/EC2",
-              MetricName: "NetworkOut",
-              Dimensions: [{ Name: "InstanceId", Value: instanceId }],
-              StartTime: startTime,
-              EndTime: endTime,
-              Period: 300,
-              Statistics: ["Sum"]
-            })
-            .promise(),
+          cloudwatch.getMetricStatistics({
+            Namespace: "AWS/EC2",
+            MetricName: "NetworkOut",
+            Dimensions: [{ Name: "InstanceId", Value: instanceId }],
+            StartTime: startTime,
+            EndTime: endTime,
+            Period: 300,
+            Statistics: ["Sum"]
+          }).promise(),
 
-          cloudwatch
-            .getMetricStatistics({
-              Namespace: "AWS/EC2",
-              MetricName: "DiskReadOps",
-              Dimensions: [{ Name: "InstanceId", Value: instanceId }],
-              StartTime: startTime,
-              EndTime: endTime,
-              Period: 300,
-              Statistics: ["Sum"]
-            })
-            .promise(),
+          cloudwatch.getMetricStatistics({
+            Namespace: "AWS/EC2",
+            MetricName: "DiskReadOps",
+            Dimensions: [{ Name: "InstanceId", Value: instanceId }],
+            StartTime: startTime,
+            EndTime: endTime,
+            Period: 300,
+            Statistics: ["Sum"]
+          }).promise(),
 
-          cloudwatch
-            .getMetricStatistics({
-              Namespace: "AWS/EC2",
-              MetricName: "DiskWriteOps",
-              Dimensions: [{ Name: "InstanceId", Value: instanceId }],
-              StartTime: startTime,
-              EndTime: endTime,
-              Period: 300,
-              Statistics: ["Sum"]
-            })
-            .promise()
+          cloudwatch.getMetricStatistics({
+            Namespace: "AWS/EC2",
+            MetricName: "DiskWriteOps",
+            Dimensions: [{ Name: "InstanceId", Value: instanceId }],
+            StartTime: startTime,
+            EndTime: endTime,
+            Period: 300,
+            Statistics: ["Sum"]
+          }).promise()
         ]);
 
         const cpuValue = cpuData.Datapoints.length
@@ -130,19 +127,7 @@ app.get("/monitoring", async (req, res, next) => {
           ? diskWriteData.Datapoints.at(-1).Sum
           : 0;
 
-        // result.push({
-        //   instanceId,
-        //   state,
-        //   type,
-        //   metrics: {
-        //     cpuUtilization: Number(cpuValue.toFixed(2)),
-        //     networkInBytes: networkIn,
-        //     networkOutBytes: networkOut,
-        //     diskReadOps: diskRead,
-        //     diskWriteOps: diskWrite
-        //   }
-        // });
-        result.push({
+        instances.push({
           instanceId,
           state,
           type,
@@ -159,6 +144,9 @@ app.get("/monitoring", async (req, res, next) => {
             networkOutBytes: networkOut,
             diskReadOps: diskRead,
             diskWriteOps: diskWrite
+          },
+          memory: {
+            status: "Not available (requires CloudWatch Agent)"
           }
         });
       }
@@ -169,11 +157,9 @@ app.get("/monitoring", async (req, res, next) => {
 
     for (const bucket of bucketList.Buckets) {
       try {
-        const objects = await s3
-          .listObjectsV2({
-            Bucket: bucket.Name
-          })
-          .promise();
+        const objects = await s3.listObjectsV2({
+          Bucket: bucket.Name
+        }).promise();
 
         s3Buckets.push({
           bucketName: bucket.Name,
@@ -184,11 +170,20 @@ app.get("/monitoring", async (req, res, next) => {
       }
     }
 
+    const sgData = await ec2.describeSecurityGroups().promise();
+
+    const security = sgData.SecurityGroups.map(sg => ({
+      groupId: sg.GroupId,
+      groupName: sg.GroupName,
+      description: sg.Description
+    }));
+
     res.status(200).json({
       timestamp: new Date().toISOString(),
       region: AWS.config.region,
-      instances: result,
-      s3: s3Buckets
+      instances,
+      s3: s3Buckets,
+      security
     });
   } catch (error) {
     next(error);
