@@ -22,9 +22,8 @@ const getLatestMetric = (data, field) => {
 
 app.get("/monitoring", async (req, res, next) => {
   try {
-    console.log("Monitoring endpoint hit");
-
     const instances = [];
+    const s3Buckets = [];
 
     const ec2Data = await ec2.describeInstances({
       Filters: [{ Name: "instance-state-name", Values: ["running"] }]
@@ -135,22 +134,46 @@ app.get("/monitoring", async (req, res, next) => {
       }
     }
 
-    const s3Buckets = [];
     const bucketList = await s3.listBuckets().promise();
 
     for (const bucket of bucketList.Buckets) {
       try {
-        const objects = await s3.listObjectsV2({ Bucket: bucket.Name }).promise();
+        const s3End = new Date();
+        const s3Start = new Date(s3End.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+        const [sizeData, objectData] = await Promise.all([
+          cloudwatch.getMetricStatistics({
+            Namespace: "AWS/S3",
+            MetricName: "BucketSizeBytes",
+            Dimensions: [
+              { Name: "BucketName", Value: bucket.Name },
+              { Name: "StorageType", Value: "StandardStorage" }
+            ],
+            StartTime: s3Start,
+            EndTime: s3End,
+            Period: 86400,
+            Statistics: ["Average"]
+          }).promise(),
+
+          cloudwatch.getMetricStatistics({
+            Namespace: "AWS/S3",
+            MetricName: "NumberOfObjects",
+            Dimensions: [
+              { Name: "BucketName", Value: bucket.Name },
+              { Name: "StorageType", Value: "AllStorageTypes" }
+            ],
+            StartTime: s3Start,
+            EndTime: s3End,
+            Period: 86400,
+            Statistics: ["Average"]
+          }).promise()
+        ]);
 
         let encryptionEnabled = false;
         try {
           await s3.getBucketEncryption({ Bucket: bucket.Name }).promise();
           encryptionEnabled = true;
-        } catch (err) {
-          if (err.code !== "ServerSideEncryptionConfigurationNotFoundError") {
-            throw err;
-          }
-        }
+        } catch (err) {}
 
         let publicAccessBlocked = false;
         try {
@@ -160,18 +183,18 @@ app.get("/monitoring", async (req, res, next) => {
             publicAccess.PublicAccessBlockConfiguration.BlockPublicPolicy &&
             publicAccess.PublicAccessBlockConfiguration.IgnorePublicAcls &&
             publicAccess.PublicAccessBlockConfiguration.RestrictPublicBuckets;
-        } catch (err) {
-          console.warn(`Public access block not configured for ${bucket.Name}`);
-        }
+        } catch (err) {}
 
         s3Buckets.push({
           bucketName: bucket.Name,
-          objectCount: objects.KeyCount || 0,
+          bucketSizeBytes: getLatestMetric(sizeData, "Average"),
+          numberOfObjects: getLatestMetric(objectData, "Average"),
           encryptionEnabled,
           publicAccessBlocked
         });
+
       } catch (err) {
-        console.error(`S3 validation error for ${bucket.Name}:`, err.message);
+        console.error("S3 monitoring error:", err.message);
       }
     }
 
