@@ -2,17 +2,15 @@ import express from "express";
 import cors from "cors";
 import AWS from "aws-sdk";
 
-const app = express();
-app.use(cors());
-app.use(express.json());
-
 AWS.config.update({ region: "us-east-2" });
 
-const ec2 = new AWS.EC2();
-const cloudwatch = new AWS.CloudWatch();
-const s3 = new AWS.S3();
-
 const POWER_ACTIONS = new Set(["start", "stop"]);
+
+const createAwsClients = () => ({
+  ec2: new AWS.EC2(),
+  cloudwatch: new AWS.CloudWatch(),
+  s3: new AWS.S3()
+});
 
 const getLatestMetric = (data, field) => {
   if (!data.Datapoints || data.Datapoints.length === 0) return 0;
@@ -22,7 +20,14 @@ const getLatestMetric = (data, field) => {
   return sorted.at(-1)[field] || 0;
 };
 
-app.get("/monitoring", async (req, res, next) => {
+export const createApp = (clients = createAwsClients()) => {
+  const { ec2, cloudwatch, s3 } = clients;
+  const app = express();
+
+  app.use(cors());
+  app.use(express.json());
+
+  app.get("/monitoring", async (req, res, next) => {
   try {
     const instances = [];
     const s3Buckets = [];
@@ -217,9 +222,9 @@ app.get("/monitoring", async (req, res, next) => {
   } catch (error) {
     next(error);
   }
-});
+  });
 
-app.post("/instances/:instanceId/power", async (req, res, next) => {
+  app.post("/instances/:instanceId/power", async (req, res, next) => {
   try {
     const { instanceId } = req.params;
     const action = req.body?.action;
@@ -273,21 +278,27 @@ app.post("/instances/:instanceId/power", async (req, res, next) => {
 
     return next(error);
   }
-});
-
-app.use((req, res) => {
-  res.status(404).json({ error: "Route not found" });
-});
-
-app.use((err, req, res, next) => {
-  console.error("Backend Error:", err);
-  res.status(500).json({
-    error: "Internal Server Error",
-    message: err.message
   });
-});
+
+  app.use((req, res) => {
+    res.status(404).json({ error: "Route not found" });
+  });
+
+  app.use((err, req, res, next) => {
+    console.error("Backend Error:", err);
+    res.status(500).json({
+      error: "Internal Server Error",
+      message: err.message
+    });
+  });
+
+  return app;
+};
 
 const PORT = 5000;
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server running on http://0.0.0.0:${PORT}`);
-});
+if (process.env.NODE_ENV !== "test") {
+  const app = createApp();
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server running on http://0.0.0.0:${PORT}`);
+  });
+}
