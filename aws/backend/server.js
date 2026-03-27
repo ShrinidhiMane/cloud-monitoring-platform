@@ -12,6 +12,8 @@ const ec2 = new AWS.EC2();
 const cloudwatch = new AWS.CloudWatch();
 const s3 = new AWS.S3();
 
+const POWER_ACTIONS = new Set(["start", "stop"]);
+
 const getLatestMetric = (data, field) => {
   if (!data.Datapoints || data.Datapoints.length === 0) return 0;
   const sorted = data.Datapoints.sort(
@@ -214,6 +216,62 @@ app.get("/monitoring", async (req, res, next) => {
 
   } catch (error) {
     next(error);
+  }
+});
+
+app.post("/instances/:instanceId/power", async (req, res, next) => {
+  try {
+    const { instanceId } = req.params;
+    const action = req.body?.action;
+
+    if (!instanceId) {
+      return res.status(400).json({
+        error: "ValidationError",
+        message: "Path parameter 'instanceId' is required"
+      });
+    }
+
+    if (!POWER_ACTIONS.has(action)) {
+      return res.status(400).json({
+        error: "ValidationError",
+        message: "Body field 'action' must be either 'start' or 'stop'"
+      });
+    }
+
+    const request = { InstanceIds: [instanceId] };
+    const response = action === "start"
+      ? await ec2.startInstances(request).promise()
+      : await ec2.stopInstances(request).promise();
+
+    const transitions = action === "start"
+      ? (response.StartingInstances || [])
+      : (response.StoppingInstances || []);
+    const transition = transitions.find((item) => item.InstanceId === instanceId) || null;
+
+    return res.status(200).json({
+      instanceId,
+      action,
+      status: "accepted",
+      previousState: transition?.PreviousState?.Name || null,
+      currentState: transition?.CurrentState?.Name || null,
+      requestId: response.$response?.requestId || null
+    });
+  } catch (error) {
+    if (error?.code === "InvalidInstanceID.NotFound") {
+      return res.status(404).json({
+        error: error.code,
+        message: error.message
+      });
+    }
+
+    if (error?.code === "IncorrectInstanceState") {
+      return res.status(409).json({
+        error: error.code,
+        message: error.message
+      });
+    }
+
+    return next(error);
   }
 });
 
