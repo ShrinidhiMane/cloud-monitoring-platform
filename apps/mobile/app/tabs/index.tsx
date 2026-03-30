@@ -10,13 +10,14 @@ import {
 import { useRouter } from "expo-router";
 
 import { InstanceCard } from "@/components/InstanceCard";
+import { cacheMonitoringHistory } from "@/services/metricsHistory";
 import type { MonitoringResponse, MonitoringInstance } from "api-client";
 import { apiFetch } from "api-client";
 import { mockInstances } from "@/data/mockInstances";
 
 export default function InstancesScreen() {
   const router = useRouter();
-  const [, setInstances] = useState<MonitoringInstance[]>([]);
+  const [instances, setInstances] = useState<MonitoringInstance[]>([]);
   const [, setIsError] = useState<boolean>(false);
 
   useEffect(() => {
@@ -24,7 +25,13 @@ export default function InstancesScreen() {
       try {
         const instancesResponse: MonitoringResponse =
           await apiFetch("/monitoring");
-        setInstances(instancesResponse.instances ?? []);
+        const liveInstances = instancesResponse.instances ?? [];
+        setInstances(liveInstances);
+        await Promise.all(
+          liveInstances.map((instance) =>
+            cacheMonitoringHistory(instance, "1h"),
+          ),
+        );
         /* eslint-disable-next-line @typescript-eslint/no-unused-vars,no-unused-vars  */
       } catch (error) {
         setIsError(true);
@@ -33,7 +40,13 @@ export default function InstancesScreen() {
     loadInstances();
   }, []);
 
-  const renderItem = ({ item }: { item: MonitoringInstance }) => (
+  const displayInstances = instances.length ? instances : mockInstances;
+
+  const renderItem = ({
+    item,
+  }: {
+    item: MonitoringInstance | (typeof mockInstances)[number];
+  }) => (
     <Pressable
       accessibilityRole="button"
       onPress={() =>
@@ -56,7 +69,7 @@ export default function InstancesScreen() {
       </View>
 
       <FlatList
-        data={mockInstances}
+        data={displayInstances}
         keyExtractor={(item) => item.id}
         renderItem={renderItem}
         contentContainerStyle={styles.listContent}

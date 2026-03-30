@@ -10,9 +10,14 @@ import {
 import { mockCpuSeries } from "@/data/mockCpuSeries";
 import { mockInstances } from "@/data/mockInstances";
 import {
+  cacheMonitoringHistory,
+  readCachedCpuHistory,
+} from "@/services/metricsHistory";
+import {
+  type CpuUsagePoint,
   fetchInstanceMonitoring,
   type MonitoringInstance,
-  InstanceState,
+  type InstanceState,
 } from "api-client";
 
 const STATE_COLORS: Record<InstanceState, { bg: string; text: string }> = {
@@ -23,6 +28,35 @@ const STATE_COLORS: Record<InstanceState, { bg: string; text: string }> = {
   "shutting-down": { bg: "#FFE4E6", text: "#9F1239" },
   terminated: { bg: "#F3F4F6", text: "#6B7280" },
 };
+const POLL_INTERVAL_MS = 30_000;
+const MAX_CHART_POINTS = 24;
+
+function downsampleSeries(
+  series: CpuUsagePoint[],
+  maxPoints = MAX_CHART_POINTS,
+): CpuUsagePoint[] {
+  if (series.length <= maxPoints) {
+    return series;
+  }
+
+  const bucketSize = Math.ceil(series.length / maxPoints);
+  const compressedSeries: CpuUsagePoint[] = [];
+
+  for (let index = 0; index < series.length; index += bucketSize) {
+    const bucket = series.slice(index, index + bucketSize);
+    const latestPoint = bucket[bucket.length - 1];
+    const averageValue =
+      bucket.reduce((sum, point) => sum + point.value, 0) / bucket.length;
+
+    compressedSeries.push({
+      timestamp: latestPoint.timestamp,
+      label: latestPoint.label,
+      value: Math.round(averageValue),
+    });
+  }
+
+  return compressedSeries;
+}
 
 export default function InstanceDetailScreen() {
   const params = useLocalSearchParams<{ id?: string }>();
@@ -35,9 +69,34 @@ export default function InstanceDetailScreen() {
   const [isLoadingMetrics, setIsLoadingMetrics] = useState(false);
   const [metricsError, setMetricsError] = useState<string | null>(null);
   const [useMockData, setUseMockData] = useState(false);
+  const [localHistorySeries, setLocalHistorySeries] = useState<CpuUsagePoint[]>(
+    [],
+  );
+  const [hasLoadedHistory, setHasLoadedHistory] = useState(false);
+  const remoteRange = timeRange === "7d" ? "24h" : timeRange;
 
-  const selectedSeries = mockCpuSeries;
+  const selectedSeries = useMemo(() => {
+    if (localHistorySeries.length) {
+      return localHistorySeries;
+    }
+
+    if (hasLoadedHistory && useMockData) {
+      return mockCpuSeries;
+    }
+
+    return [];
+  }, [hasLoadedHistory, localHistorySeries, useMockData]);
+  const chartSeries = useMemo(() => {
+    return downsampleSeries(selectedSeries);
+  }, [selectedSeries]);
   const { average, peak } = useMemo(() => {
+    if (!selectedSeries.length) {
+      return {
+        average: 0,
+        peak: 0,
+      };
+    }
+
     const total = selectedSeries.reduce((sum, point) => sum + point.value, 0);
     return {
       average: Math.round(total / selectedSeries.length),
@@ -51,23 +110,69 @@ export default function InstanceDetailScreen() {
   useEffect(() => {
     let isMounted = true;
 
+    const loadCachedHistory = async () => {
+      const cachedSeries = await readCachedCpuHistory(instance.id, timeRange);
+      if (!isMounted) {
+        return;
+      }
+
+      setLocalHistorySeries(cachedSeries);
+      setUseMockData(cachedSeries.length === 0);
+      setHasLoadedHistory(true);
+    };
+
     const loadMetrics = async () => {
       setIsLoadingMetrics(true);
       setMetricsError(null);
       try {
-        const result = await fetchInstanceMonitoring(instance.id, timeRange);
+        const result = await fetchInstanceMonitoring(instance.id, remoteRange);
         if (isMounted) {
           setMonitoring(result);
-          setUseMockData(!result);
           if (!result) {
-            setMetricsError("CloudWatch unavailable. Showing mock data.");
+            const cachedSeries = await readCachedCpuHistory(
+              instance.id,
+              timeRange,
+            );
+            if (!isMounted) {
+              return;
+            }
+
+            setLocalHistorySeries(cachedSeries);
+            setUseMockData(cachedSeries.length === 0);
+            setMetricsError(
+              cachedSeries.length
+                ? "Live metrics unavailable. Showing saved history."
+                : "CloudWatch unavailable. Showing mock data.",
+            );
+            return;
           }
+
+          const cachedSeries = await cacheMonitoringHistory(result, timeRange);
+          if (!isMounted) {
+            return;
+          }
+
+          setLocalHistorySeries(cachedSeries);
+          setUseMockData(false);
         }
         /*eslint-disable-next-line @typescript-eslint/no-unused-vars */
       } catch (_) {
         if (isMounted) {
-          setMetricsError("CloudWatch unavailable. Showing mock data.");
-          setUseMockData(true);
+          const cachedSeries = await readCachedCpuHistory(
+            instance.id,
+            timeRange,
+          );
+          if (!isMounted) {
+            return;
+          }
+
+          setLocalHistorySeries(cachedSeries);
+          setUseMockData(cachedSeries.length === 0);
+          setMetricsError(
+            cachedSeries.length
+              ? "Refresh failed. Showing saved local history."
+              : "CloudWatch unavailable. Showing mock data.",
+          );
         }
       } finally {
         if (isMounted) {
@@ -76,12 +181,18 @@ export default function InstanceDetailScreen() {
       }
     };
 
-    loadMetrics();
+    void loadCachedHistory();
+    void loadMetrics();
+
+    const pollId = setInterval(() => {
+      void loadMetrics();
+    }, POLL_INTERVAL_MS);
 
     return () => {
       isMounted = false;
+      clearInterval(pollId);
     };
-  }, [instance.id, timeRange]);
+  }, [instance.id, remoteRange, timeRange]);
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -120,6 +231,11 @@ export default function InstanceDetailScreen() {
                 Live CPU: {monitoring.cpuPercent}%
               </Text>
             )}
+            {localHistorySeries.length > 0 && (
+              <Text style={styles.cacheText}>
+                Building the graph from saved on-device history.
+              </Text>
+            )}
             {isLoadingMetrics && (
               <Text style={styles.loadingText}>Loading metrics…</Text>
             )}
@@ -142,7 +258,7 @@ export default function InstanceDetailScreen() {
           </View>
         </View>
         <TimeRangeSelector value={timeRange} onChange={setTimeRange} />
-        <CpuUsageChart data={selectedSeries} />
+        <CpuUsageChart data={chartSeries} />
       </View>
     </ScrollView>
   );
@@ -236,6 +352,11 @@ const styles = StyleSheet.create({
     marginTop: 6,
     fontSize: 12,
     color: "#94A3B8",
+  },
+  cacheText: {
+    marginTop: 6,
+    fontSize: 12,
+    color: "#0F766E",
   },
   mockText: {
     marginTop: 6,
