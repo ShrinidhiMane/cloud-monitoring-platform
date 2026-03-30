@@ -10,13 +10,7 @@ This is the mobile app for the Cloud Infrastructure Monitoring project. It uses 
    npm install
    ```
 
-2. Build and open the native iOS app
-
-   ```bash
-   npm run ios
-   ```
-
-3. Start Metro for the development build
+2. Start Metro for the development build
 
    ```bash
    npm start
@@ -27,6 +21,12 @@ This is the mobile app for the Cloud Infrastructure Monitoring project. It uses 
 
    ```bash
    npm run start:tunnel
+   ```
+
+3. Build and open the native iOS app
+
+   ```bash
+   npm run ios
    ```
 
 ## Current Screen
@@ -62,7 +62,7 @@ Replace `mockInstances` with real data once the OpenAPI client is ready, and con
 
 ## Troubleshooting
 
-- If you see `Could not connect to development server`, make sure you are running `npm start` from `apps/mobile` after `npm run ios`.
+- If you see `Could not connect to development server`, make sure you are running `npm start` from `apps/mobile` before `npm run ios`.
 - The default Metro URL is `http://localhost:8081` for simulator use. If you are on a physical device, use `npm run start:tunnel` instead.
 - If you see a white screen, stop Metro and restart from `apps/mobile` with `npx expo start --dev-client --host localhost -c`.
 - Make sure Metro is running from this folder: `.../SER517-Team5/apps/mobile`.
