@@ -9,6 +9,7 @@ import {
 } from "@/components/TimeRangeSelector";
 import { mockCpuSeries } from "@/data/mockCpuSeries";
 import { mockInstances } from "@/data/mockInstances";
+import { hydrateApiBaseUrl } from "@/services/apiBaseUrl";
 import {
   cacheMonitoringHistory,
   readCachedCpuHistory,
@@ -73,6 +74,7 @@ export default function InstanceDetailScreen() {
     [],
   );
   const [hasLoadedHistory, setHasLoadedHistory] = useState(false);
+  const [apiBaseUrl, setCurrentApiBaseUrl] = useState("");
   const remoteRange = timeRange === "7d" ? "24h" : timeRange;
 
   const selectedSeries = useMemo(() => {
@@ -124,7 +126,14 @@ export default function InstanceDetailScreen() {
     const loadMetrics = async () => {
       setIsLoadingMetrics(true);
       setMetricsError(null);
+      let activeApiBaseUrl = "";
       try {
+        activeApiBaseUrl = await hydrateApiBaseUrl();
+        if (!isMounted) {
+          return;
+        }
+
+        setCurrentApiBaseUrl(activeApiBaseUrl);
         const result = await fetchInstanceMonitoring(instance.id, remoteRange);
         if (isMounted) {
           setMonitoring(result);
@@ -142,7 +151,7 @@ export default function InstanceDetailScreen() {
             setMetricsError(
               cachedSeries.length
                 ? "Live metrics unavailable. Showing saved history."
-                : "CloudWatch unavailable. Showing mock data.",
+                : `CloudWatch unavailable at ${activeApiBaseUrl}. Showing mock data.`,
             );
             return;
           }
@@ -171,7 +180,9 @@ export default function InstanceDetailScreen() {
           setMetricsError(
             cachedSeries.length
               ? "Refresh failed. Showing saved local history."
-              : "CloudWatch unavailable. Showing mock data.",
+              : apiBaseUrl
+                ? `CloudWatch unavailable at ${activeApiBaseUrl || apiBaseUrl}. Showing mock data.`
+                : "CloudWatch unavailable. Showing mock data.",
           );
         }
       } finally {
@@ -236,6 +247,9 @@ export default function InstanceDetailScreen() {
                 Building the graph from saved on-device history.
               </Text>
             )}
+            {apiBaseUrl ? (
+              <Text style={styles.endpointText}>API: {apiBaseUrl}</Text>
+            ) : null}
             {isLoadingMetrics && (
               <Text style={styles.loadingText}>Loading metrics…</Text>
             )}
@@ -357,6 +371,11 @@ const styles = StyleSheet.create({
     marginTop: 6,
     fontSize: 12,
     color: "#0F766E",
+  },
+  endpointText: {
+    marginTop: 6,
+    fontSize: 12,
+    color: "#475569",
   },
   mockText: {
     marginTop: 6,
