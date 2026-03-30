@@ -2,9 +2,13 @@
   "extends": ["expo/tsconfig.base","../../tsconfig.base.json"],
   "compilerOptions": {
     "strict": true,
+    "baseUrl": ".",
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "api-client": [
+        "../../packages/api-client/src/index.ts"
       ]
     }
   },
