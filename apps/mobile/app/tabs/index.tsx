@@ -7,7 +7,7 @@ import { InstanceCard } from "@/components/InstanceCard";
 import { hydrateApiBaseUrl } from "@/services/apiBaseUrl";
 import { cacheMonitoringHistory } from "@/services/metricsHistory";
 import type { MonitoringResponse, MonitoringInstance } from "api-client";
-import { apiFetch } from "api-client";
+import { fetchMonitoringOverview } from "api-client";
 import { mockInstances } from "@/data/mockInstances";
 
 function ItemSeparator() {
@@ -28,7 +28,7 @@ export default function InstancesScreen() {
 
     try {
       const instancesResponse: MonitoringResponse =
-        await apiFetch("/monitoring");
+        await fetchMonitoringOverview();
       const liveInstances = instancesResponse.instances ?? [];
       setInstances(liveInstances);
       setIsError(false);
