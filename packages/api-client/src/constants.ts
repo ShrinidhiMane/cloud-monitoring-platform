@@ -1,4 +1,4 @@
-export const API_URL = "http://192.168.0.65:4000/";
+export const API_URL = "http://3.134.116.3:5000/";
 
 let apiBaseUrl = API_URL;
 

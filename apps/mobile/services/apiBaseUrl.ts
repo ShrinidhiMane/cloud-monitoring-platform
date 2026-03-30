@@ -3,7 +3,7 @@ import * as SecureStore from "expo-secure-store";
 import { getApiBaseUrl, setApiBaseUrl } from "api-client";
 
 const API_BASE_URL_KEY = "settings.apiBaseUrl";
-const FALLBACK_LOCAL_API_URL = "http://localhost:4000";
+const FALLBACK_LOCAL_API_URL = "http://3.134.116.3:5000";
 
 const memoryStore: Record<string, string | null> = {};
 const defaultApiBaseUrl = normalizeApiBaseUrl(
@@ -65,7 +65,10 @@ export function normalizeApiBaseUrl(url: string): string {
     return defaultApiBaseUrl;
   }
 
-  return ensureProtocol(trimmedUrl).replace(/\/+$/, "");
+  const withoutQuery = ensureProtocol(trimmedUrl).split("?")[0];
+  const withoutMonitoringPath = withoutQuery.replace(/\/monitoring\/?$/i, "");
+
+  return withoutMonitoringPath.replace(/\/+$/, "");
 }
 
 export function getDefaultApiBaseUrl(): string {
