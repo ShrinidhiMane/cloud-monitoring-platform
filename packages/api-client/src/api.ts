@@ -1,5 +1,9 @@
 import { getApiBaseUrl } from "./constants";
-import { MonitoringInstance } from "./types";
+import type {
+  CpuUsagePoint,
+  MonitoringInstance,
+  MonitoringResponse,
+} from "./types";
 
 export async function apiFetch<T>(
   path: string,
@@ -32,12 +36,132 @@ function buildMonitoringUrl(range?: string): string {
   return `${base}/monitoring?range=${encodeURIComponent(range)}`;
 }
 
+interface MonitoringMetricPointResponse {
+  timestamp?: string;
+  value?: number;
+}
+
+interface MonitoringMetricsResponse {
+  cpuUtilization?: number;
+  memoryUtilization?: number;
+  networkInBytes?: number;
+  networkOutBytes?: number;
+  diskReadOps?: number;
+  diskWriteOps?: number;
+}
+
+interface MonitoringInstanceResponse {
+  id?: string;
+  instanceId?: string;
+  name?: string;
+  state: MonitoringInstance["state"];
+  type: string;
+  zone?: string;
+  cpuPercent?: number;
+  memoryPercent?: number;
+  networkInBytes?: number;
+  networkOutBytes?: number;
+  diskReadOps?: number;
+  diskWriteOps?: number;
+  updatedAt?: string;
+  cpuSeries?: MonitoringMetricPointResponse[];
+  metrics?: MonitoringMetricsResponse;
+}
+
+interface MonitoringApiResponse {
+  instances?: MonitoringInstanceResponse[];
+  region?: string;
+  timestamp?: string;
+}
+
+function roundMetricValue(value?: number): number {
+  return Number((value ?? 0).toFixed(2));
+}
+
+function formatMetricLabel(timestamp: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(timestamp));
+}
+
+function normalizeCpuSeries(
+  points: MonitoringMetricPointResponse[] = [],
+): CpuUsagePoint[] {
+  return points
+    .filter(
+      (
+        point,
+      ): point is Required<
+        Pick<MonitoringMetricPointResponse, "timestamp" | "value">
+      > => {
+        return (
+          typeof point.timestamp === "string" && typeof point.value === "number"
+        );
+      },
+    )
+    .map((point) => ({
+      timestamp: point.timestamp,
+      label: formatMetricLabel(point.timestamp),
+      value: roundMetricValue(point.value),
+    }));
+}
+
+function normalizeMonitoringInstance(
+  instance: MonitoringInstanceResponse,
+): MonitoringInstance {
+  const instanceId = instance.id ?? instance.instanceId ?? "unknown-instance";
+  const metrics = instance.metrics ?? {};
+  const cpuSeries = normalizeCpuSeries(instance.cpuSeries);
+
+  return {
+    id: instanceId,
+    name: instance.name ?? instanceId,
+    state: instance.state,
+    type: instance.type,
+    zone: instance.zone,
+    cpuPercent: roundMetricValue(instance.cpuPercent ?? metrics.cpuUtilization),
+    memoryPercent: roundMetricValue(
+      instance.memoryPercent ?? metrics.memoryUtilization,
+    ),
+    networkInBytes: roundMetricValue(
+      instance.networkInBytes ?? metrics.networkInBytes,
+    ),
+    networkOutBytes: roundMetricValue(
+      instance.networkOutBytes ?? metrics.networkOutBytes,
+    ),
+    diskReadOps: roundMetricValue(instance.diskReadOps ?? metrics.diskReadOps),
+    diskWriteOps: roundMetricValue(
+      instance.diskWriteOps ?? metrics.diskWriteOps,
+    ),
+    cpuSeries,
+    updatedAt:
+      instance.updatedAt ??
+      cpuSeries[cpuSeries.length - 1]?.timestamp ??
+      new Date().toISOString(),
+  };
+}
+
+export async function fetchMonitoringOverview(
+  range?: string,
+): Promise<MonitoringResponse> {
+  const response = await apiFetch<MonitoringApiResponse>(
+    buildMonitoringUrl(range),
+  );
+
+  return {
+    instances: (response.instances ?? []).map(normalizeMonitoringInstance),
+    region: response.region ?? "",
+    timestamp: response.timestamp ?? new Date().toISOString(),
+  };
+}
+
 export async function fetchInstanceMonitoring(
   instanceId: string,
   range?: string,
 ): Promise<MonitoringInstance | null> {
-  const instances: MonitoringInstance[] = await apiFetch(
-    buildMonitoringUrl(range),
+  const response = await fetchMonitoringOverview(range);
+  return (
+    response.instances.find((instance) => instance.id === instanceId) ?? null
   );
-  return instances.find((instance) => instance.id === instanceId) ?? null;
 }
