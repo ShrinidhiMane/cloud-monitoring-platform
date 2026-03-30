@@ -1,4 +1,4 @@
-import type { InstanceSummary } from "@/types/instances";
+import type { InstanceSummary } from "api-client";
 
 export const mockInstances: InstanceSummary[] = [
   {
