@@ -3,11 +3,13 @@
   "main": "expo-router/entry",
   "version": "1.0.0",
   "scripts": {
-    "start": "expo start --dev-client --host localhost",
-    "start:lan": "expo start --dev-client --host lan",
-    "start:tunnel": "expo start --dev-client --host tunnel",
-    "android": "expo run:android --no-bundler",
-    "ios": "expo run:ios --no-bundler",
+    "start": "expo start",
+    "start:lan": "expo start --lan",
+    "start:tunnel": "expo start --tunnel",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "android:native": "expo run:android --no-bundler",
+    "ios:native": "expo run:ios --no-bundler",
     "web": "expo start --web",
     "lint": "expo lint --max-warnings=0",
     "lint:fix": "expo lint --fix"
