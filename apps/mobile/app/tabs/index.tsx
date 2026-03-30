@@ -1,13 +1,6 @@
 import { useFocusEffect } from "@react-navigation/native";
 import React, { useCallback, useState } from "react";
-import {
-  FlatList,
-  Pressable,
-  SafeAreaView,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
+import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 
 import { InstanceCard } from "@/components/InstanceCard";
@@ -87,27 +80,29 @@ export default function InstancesScreen() {
     </Pressable>
   );
 
-  return (
-    <SafeAreaView style={styles.safeArea}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Instances</Text>
-        <Text style={styles.subtitle}>EC2 name, IDs, state, and type</Text>
-        <View style={[styles.statusCard, isError && styles.statusCardError]}>
-          <Text style={[styles.statusText, isError && styles.statusTextError]}>
-            {statusMessage}
-          </Text>
-        </View>
+  const renderHeader = () => (
+    <View style={styles.header}>
+      <Text style={styles.title}>Instances</Text>
+      <Text style={styles.subtitle}>EC2 name, IDs, state, and type</Text>
+      <View style={[styles.statusCard, isError && styles.statusCardError]}>
+        <Text style={[styles.statusText, isError && styles.statusTextError]}>
+          {statusMessage}
+        </Text>
       </View>
+    </View>
+  );
 
-      <FlatList
-        data={displayInstances}
-        keyExtractor={(item) => item.id}
-        renderItem={renderItem}
-        contentContainerStyle={styles.listContent}
-        ItemSeparatorComponent={() => <View style={styles.separator} />}
-        showsVerticalScrollIndicator={false}
-      />
-    </SafeAreaView>
+  return (
+    <FlatList
+      data={displayInstances}
+      keyExtractor={(item) => item.id}
+      renderItem={renderItem}
+      ListHeaderComponent={renderHeader}
+      contentContainerStyle={styles.listContent}
+      ItemSeparatorComponent={() => <View style={styles.separator} />}
+      showsVerticalScrollIndicator={false}
+      style={styles.safeArea}
+    />
   );
 }
 
@@ -153,6 +148,7 @@ const styles = StyleSheet.create({
   },
   listContent: {
     paddingHorizontal: 20,
+    paddingTop: 20,
     paddingBottom: 24,
   },
   cardWrapper: {
