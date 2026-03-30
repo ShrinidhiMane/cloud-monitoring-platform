@@ -10,6 +10,10 @@ import type { MonitoringResponse, MonitoringInstance } from "api-client";
 import { apiFetch } from "api-client";
 import { mockInstances } from "@/data/mockInstances";
 
+function ItemSeparator() {
+  return <View style={styles.separator} />;
+}
+
 export default function InstancesScreen() {
   const router = useRouter();
   const [instances, setInstances] = useState<MonitoringInstance[]>([]);
@@ -95,11 +99,11 @@ export default function InstancesScreen() {
   return (
     <FlatList
       data={displayInstances}
-      keyExtractor={(item) => item.id}
+      keyExtractor={(item, index) => `${item.id}-${index}`}
       renderItem={renderItem}
-      ListHeaderComponent={renderHeader}
+      ListHeaderComponent={renderHeader()}
       contentContainerStyle={styles.listContent}
-      ItemSeparatorComponent={() => <View style={styles.separator} />}
+      ItemSeparatorComponent={ItemSeparator}
       showsVerticalScrollIndicator={false}
       style={styles.safeArea}
     />
