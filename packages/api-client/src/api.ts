@@ -1,4 +1,4 @@
-import { getApiBaseUrl } from "./constants";
+import { getApiBaseUrl, getMonitoringUrl } from "./constants";
 import type {
   CpuUsagePoint,
   MonitoringInstance,
@@ -29,11 +29,7 @@ export async function apiFetch<T>(
 }
 
 function buildMonitoringUrl(range?: string): string {
-  const base = getApiBaseUrl().replace(/\/$/, "");
-  if (!range) {
-    return `${base}/monitoring`;
-  }
-  return `${base}/monitoring?range=${encodeURIComponent(range)}`;
+  return getMonitoringUrl(range);
 }
 
 interface MonitoringMetricPointResponse {

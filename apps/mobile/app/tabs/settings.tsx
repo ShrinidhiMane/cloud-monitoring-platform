@@ -86,13 +86,13 @@ export default function SettingsScreen() {
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.label}>API Base URL</Text>
+          <Text style={styles.label}>Monitoring Endpoint</Text>
           <TextInput
             autoCapitalize="none"
             autoCorrect={false}
             keyboardType="url"
             onChangeText={setApiBaseUrl}
-            placeholder="http://localhost:4000"
+            placeholder="http://3.134.116.3:5000/monitoring"
             style={styles.input}
             value={apiBaseUrl}
           />

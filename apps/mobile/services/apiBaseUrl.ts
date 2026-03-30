@@ -1,18 +1,18 @@
 import { Platform } from "react-native";
 import * as SecureStore from "expo-secure-store";
-import { getApiBaseUrl, setApiBaseUrl } from "api-client";
+import { MONITORING_URL, getApiBaseUrl, setApiBaseUrl } from "api-client";
 
 const API_BASE_URL_KEY = "settings.apiBaseUrl";
-const FALLBACK_LOCAL_API_URL = "http://3.134.116.3:5000";
+const FALLBACK_MONITORING_URL = MONITORING_URL;
 
 const memoryStore: Record<string, string | null> = {};
-const defaultApiBaseUrl = normalizeApiBaseUrl(
-  process.env.EXPO_PUBLIC_API_URL?.trim() || FALLBACK_LOCAL_API_URL,
+const defaultMonitoringUrl = normalizeMonitoringUrl(
+  process.env.EXPO_PUBLIC_API_URL?.trim() || FALLBACK_MONITORING_URL,
 );
 
 let secureStoreAvailable: Promise<boolean> | null = null;
 
-setApiBaseUrl(defaultApiBaseUrl);
+setApiBaseUrl(toApiBaseUrl(defaultMonitoringUrl));
 
 async function canUseSecureStore(): Promise<boolean> {
   if (Platform.OS === "web") {
@@ -60,69 +60,78 @@ function ensureProtocol(url: string): string {
 }
 
 export function normalizeApiBaseUrl(url: string): string {
+  return normalizeMonitoringUrl(url);
+}
+
+function toApiBaseUrl(monitoringUrl: string): string {
+  return monitoringUrl.replace(/\/monitoring\/?$/i, "");
+}
+
+function normalizeMonitoringUrl(url: string): string {
   const trimmedUrl = url.trim();
   if (!trimmedUrl) {
-    return defaultApiBaseUrl;
+    return defaultMonitoringUrl;
   }
 
   const withoutQuery = ensureProtocol(trimmedUrl).split("?")[0];
-  const withoutMonitoringPath = withoutQuery.replace(/\/monitoring\/?$/i, "");
+  const baseUrl = withoutQuery.replace(/\/monitoring\/?$/i, "");
 
-  return withoutMonitoringPath.replace(/\/+$/, "");
+  return `${baseUrl.replace(/\/+$/, "")}/monitoring`;
 }
 
 export function getDefaultApiBaseUrl(): string {
-  return defaultApiBaseUrl;
+  return defaultMonitoringUrl;
 }
 
 export async function hydrateApiBaseUrl(): Promise<string> {
   const savedValue = await getStoredValue(API_BASE_URL_KEY);
   const nextValue = savedValue
-    ? normalizeApiBaseUrl(savedValue)
-    : defaultApiBaseUrl;
+    ? normalizeMonitoringUrl(savedValue)
+    : defaultMonitoringUrl;
 
-  setApiBaseUrl(nextValue);
+  setApiBaseUrl(toApiBaseUrl(nextValue));
   return nextValue;
 }
 
 export async function getConfiguredApiBaseUrl(): Promise<string> {
   const savedValue = await getStoredValue(API_BASE_URL_KEY);
   if (savedValue) {
-    return normalizeApiBaseUrl(savedValue);
+    return normalizeMonitoringUrl(savedValue);
   }
 
-  return getApiBaseUrl() || defaultApiBaseUrl;
+  if (getApiBaseUrl()) {
+    return normalizeMonitoringUrl(getApiBaseUrl());
+  }
+
+  return defaultMonitoringUrl;
 }
 
 export async function saveApiBaseUrl(url: string): Promise<string> {
-  const normalizedUrl = normalizeApiBaseUrl(url);
+  const normalizedUrl = normalizeMonitoringUrl(url);
   await setStoredValue(API_BASE_URL_KEY, normalizedUrl);
-  setApiBaseUrl(normalizedUrl);
+  setApiBaseUrl(toApiBaseUrl(normalizedUrl));
   return normalizedUrl;
 }
 
 export async function resetApiBaseUrl(): Promise<string> {
   await setStoredValue(API_BASE_URL_KEY, null);
-  setApiBaseUrl(defaultApiBaseUrl);
-  return defaultApiBaseUrl;
+  setApiBaseUrl(toApiBaseUrl(defaultMonitoringUrl));
+  return defaultMonitoringUrl;
 }
 
 export async function testApiBaseUrl(
   url: string,
 ): Promise<{ ok: true; normalizedUrl: string } | { ok: false; error: string }> {
-  const normalizedUrl = normalizeApiBaseUrl(url);
+  const normalizedUrl = normalizeMonitoringUrl(url);
   const controller = new AbortController();
   const timeoutId = setTimeout(() => {
     controller.abort();
   }, 5000);
 
   try {
-    const response = await fetch(
-      `${normalizedUrl.replace(/\/+$/, "")}/monitoring`,
-      {
-        signal: controller.signal,
-      },
-    );
+    const response = await fetch(normalizedUrl, {
+      signal: controller.signal,
+    });
 
     if (!response.ok) {
       return {
