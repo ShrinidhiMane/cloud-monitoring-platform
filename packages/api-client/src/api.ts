@@ -9,10 +9,13 @@ export async function apiFetch<T>(
   path: string,
   init: RequestInit = {},
 ): Promise<T> {
+  const isAbsoluteUrl = /^https?:\/\//i.test(path);
   const baseUrl = getApiBaseUrl().replace(/\/+$/, "");
-  const endpoint = path.startsWith("/") ? path : `/${path}`;
+  const endpoint = isAbsoluteUrl
+    ? path
+    : `${baseUrl}${path.startsWith("/") ? path : `/${path}`}`;
 
-  const res = await fetch(`${baseUrl}${endpoint}`, {
+  const res = await fetch(endpoint, {
     ...init,
     headers: {
       "Content-Type": "application/json",
