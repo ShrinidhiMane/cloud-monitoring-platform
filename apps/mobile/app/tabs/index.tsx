@@ -73,7 +73,16 @@ export default function InstancesScreen() {
     <Pressable
       accessibilityRole="button"
       onPress={() =>
-        router.push({ pathname: "/instance/[id]", params: { id: item.id } })
+        router.push({
+          pathname: "/instance/[id]",
+          params: {
+            id: item.id,
+            name: item.name,
+            state: item.state,
+            type: item.type,
+            zone: item.zone ?? "",
+          },
+        })
       }
       style={({ pressed }) => [
         styles.cardWrapper,

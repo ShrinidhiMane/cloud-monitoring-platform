@@ -10,8 +10,18 @@ interface CpuUsageChartProps {
 const MAX_CPU = 100;
 
 export function CpuUsageChart({ data, height = 140 }: CpuUsageChartProps) {
-  const safeData = data.length ? data : [{ label: "", value: 0 }];
-  const maxValue = Math.max(...safeData.map((point) => point.value), 1);
+  if (!data.length) {
+    return (
+      <View
+        style={[styles.chart, styles.emptyChart, { height }]}
+        accessibilityLabel="CPU utilization chart has no data"
+      >
+        <Text style={styles.emptyText}>No CPU samples yet</Text>
+      </View>
+    );
+  }
+
+  const maxValue = Math.max(...data.map((point) => point.value), 1);
   const normalizedMax = Math.max(maxValue, MAX_CPU);
 
   return (
@@ -20,7 +30,7 @@ export function CpuUsageChart({ data, height = 140 }: CpuUsageChartProps) {
         style={[styles.chart, { height }]}
         accessibilityLabel="CPU utilization chart"
       >
-        {safeData.map((point, index) => {
+        {data.map((point, index) => {
           const barHeight = Math.round((point.value / normalizedMax) * height);
           return (
             <View key={`${point.label}-${index}`} style={styles.barSlot}>
@@ -30,10 +40,8 @@ export function CpuUsageChart({ data, height = 140 }: CpuUsageChartProps) {
         })}
       </View>
       <View style={styles.axisRow}>
-        <Text style={styles.axisLabel}>{safeData[0].label}</Text>
-        <Text style={styles.axisLabel}>
-          {safeData[safeData.length - 1].label}
-        </Text>
+        <Text style={styles.axisLabel}>{data[0].label}</Text>
+        <Text style={styles.axisLabel}>{data[data.length - 1].label}</Text>
       </View>
     </View>
   );
@@ -50,6 +58,10 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderWidth: 1,
     borderColor: "#E2E8F0",
+  },
+  emptyChart: {
+    alignItems: "center",
+    justifyContent: "center",
   },
   barSlot: {
     flex: 1,
@@ -68,6 +80,10 @@ const styles = StyleSheet.create({
   },
   axisLabel: {
     fontSize: 12,
+    color: "#64748B",
+  },
+  emptyText: {
+    fontSize: 13,
     color: "#64748B",
   },
 });
