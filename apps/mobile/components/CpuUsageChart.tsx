@@ -9,7 +9,10 @@ interface CpuUsageChartProps {
 
 const MAX_CPU = 100;
 
-export function CpuUsageChart({ data, height = 140 }: CpuUsageChartProps) {
+export const CpuUsageChart = React.memo(function CpuUsageChart({
+  data,
+  height = 140,
+}: CpuUsageChartProps) {
   if (!data.length) {
     return (
       <View
@@ -21,8 +24,14 @@ export function CpuUsageChart({ data, height = 140 }: CpuUsageChartProps) {
     );
   }
 
-  const maxValue = Math.max(...data.map((point) => point.value), 1);
+  let maxValue = 1;
+  for (const point of data) {
+    maxValue = Math.max(maxValue, point.value);
+  }
+
   const normalizedMax = Math.max(maxValue, MAX_CPU);
+  const firstLabel = data[0].label;
+  const lastLabel = data[data.length - 1].label;
 
   return (
     <View>
@@ -33,19 +42,22 @@ export function CpuUsageChart({ data, height = 140 }: CpuUsageChartProps) {
         {data.map((point, index) => {
           const barHeight = Math.round((point.value / normalizedMax) * height);
           return (
-            <View key={`${point.label}-${index}`} style={styles.barSlot}>
+            <View
+              key={`${point.timestamp ?? point.label}-${index}`}
+              style={styles.barSlot}
+            >
               <View style={[styles.bar, { height: barHeight }]} />
             </View>
           );
         })}
       </View>
       <View style={styles.axisRow}>
-        <Text style={styles.axisLabel}>{data[0].label}</Text>
-        <Text style={styles.axisLabel}>{data[data.length - 1].label}</Text>
+        <Text style={styles.axisLabel}>{firstLabel}</Text>
+        <Text style={styles.axisLabel}>{lastLabel}</Text>
       </View>
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   chart: {

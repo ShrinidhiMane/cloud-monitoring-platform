@@ -5,7 +5,7 @@ import { useRouter } from "expo-router";
 
 import { InstanceCard } from "@/components/InstanceCard";
 import { hydrateApiBaseUrl } from "@/services/apiBaseUrl";
-import { cacheMonitoringHistory } from "@/services/metricsHistory";
+import { warmMonitoringHistory } from "@/services/metricsHistory";
 import type { MonitoringResponse, MonitoringInstance } from "api-client";
 import { fetchMonitoringOverview } from "api-client";
 import { mockInstances } from "@/data/mockInstances";
@@ -35,17 +35,17 @@ export default function InstancesScreen() {
 
       if (liveInstances.length) {
         setStatusMessage(`Live data connected to ${apiBaseUrl}.`);
+
+        // Warm local history in the background so the detail screen can open fast.
+        void Promise.allSettled(
+          liveInstances.map((instance) => warmMonitoringHistory(instance)),
+        );
       } else {
         setStatusMessage(
           `Connected to ${apiBaseUrl}, but no running instances were returned.`,
         );
       }
-
-      await Promise.all(
-        liveInstances.map((instance) => cacheMonitoringHistory(instance, "1h")),
-      );
-      /* eslint-disable-next-line @typescript-eslint/no-unused-vars,no-unused-vars  */
-    } catch (error) {
+    } catch {
       setIsError(true);
       setStatusMessage(
         `Could not reach ${apiBaseUrl}. Open Settings to update the API URL. Showing mock data.`,

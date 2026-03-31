@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 
@@ -11,11 +11,11 @@ import {
 } from "@/components/TimeRangeSelector";
 import { hydrateApiBaseUrl } from "@/services/apiBaseUrl";
 import {
-  cacheMonitoringHistory,
-  readCachedCpuHistory,
+  cacheMonitoringHistorySnapshot,
+  readCachedCpuHistorySnapshot,
+  type CachedCpuHistorySnapshot,
 } from "@/services/metricsHistory";
 import {
-  type CpuUsagePoint,
   fetchInstanceMonitoring,
   type MonitoringInstance,
   type InstanceState,
@@ -42,6 +42,20 @@ const STATE_COLORS: Record<InstanceState, { bg: string; text: string }> = {
 };
 const POLL_INTERVAL_MS = 30_000;
 const MAX_CHART_POINTS = 24;
+const EMPTY_HISTORY_SNAPSHOT: CachedCpuHistorySnapshot = {
+  chartSeries: [],
+  average: 0,
+  peak: 0,
+  sampleCount: 0,
+};
+const COMPACT_NUMBER_FORMATTER = new Intl.NumberFormat("en-US", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+const DETAIL_TIMESTAMP_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  dateStyle: "medium",
+  timeStyle: "short",
+});
 
 interface MetricTileProps {
   label: string;
@@ -73,33 +87,6 @@ function parseInstanceState(value?: string): InstanceState | null {
     : null;
 }
 
-function downsampleSeries(
-  series: CpuUsagePoint[],
-  maxPoints = MAX_CHART_POINTS,
-): CpuUsagePoint[] {
-  if (series.length <= maxPoints) {
-    return series;
-  }
-
-  const bucketSize = Math.ceil(series.length / maxPoints);
-  const compressedSeries: CpuUsagePoint[] = [];
-
-  for (let index = 0; index < series.length; index += bucketSize) {
-    const bucket = series.slice(index, index + bucketSize);
-    const latestPoint = bucket[bucket.length - 1];
-    const averageValue =
-      bucket.reduce((sum, point) => sum + point.value, 0) / bucket.length;
-
-    compressedSeries.push({
-      timestamp: latestPoint.timestamp,
-      label: latestPoint.label,
-      value: Math.round(averageValue),
-    });
-  }
-
-  return compressedSeries;
-}
-
 function formatPercent(value?: number): string {
   if (typeof value !== "number" || Number.isNaN(value)) {
     return "Unavailable";
@@ -113,10 +100,7 @@ function formatCompactNumber(value?: number): string {
     return "Unavailable";
   }
 
-  return new Intl.NumberFormat("en-US", {
-    notation: "compact",
-    maximumFractionDigits: 1,
-  }).format(value);
+  return COMPACT_NUMBER_FORMATTER.format(value);
 }
 
 function formatBytes(value?: number): string {
@@ -148,10 +132,7 @@ function formatTimestamp(timestamp?: string): string {
     return "Unavailable";
   }
 
-  return new Intl.DateTimeFormat("en-US", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(parsedTimestamp);
+  return DETAIL_TIMESTAMP_FORMATTER.format(parsedTimestamp);
 }
 
 export default function InstanceDetailScreen() {
@@ -173,40 +154,10 @@ export default function InstanceDetailScreen() {
   const [monitoring, setMonitoring] = useState<MonitoringInstance | null>(null);
   const [isLoadingMetrics, setIsLoadingMetrics] = useState(false);
   const [metricsError, setMetricsError] = useState<string | null>(null);
-  const [localHistorySeries, setLocalHistorySeries] = useState<CpuUsagePoint[]>(
-    [],
-  );
+  const [historySnapshot, setHistorySnapshot] =
+    useState<CachedCpuHistorySnapshot>(EMPTY_HISTORY_SNAPSHOT);
   const [apiBaseUrl, setCurrentApiBaseUrl] = useState("");
   const remoteRange = timeRange === "7d" ? "24h" : timeRange;
-
-  const selectedSeries = useMemo(() => {
-    if (localHistorySeries.length) {
-      return localHistorySeries;
-    }
-
-    if (monitoring?.cpuSeries.length) {
-      return monitoring.cpuSeries;
-    }
-
-    return [];
-  }, [localHistorySeries, monitoring]);
-  const chartSeries = useMemo(() => {
-    return downsampleSeries(selectedSeries);
-  }, [selectedSeries]);
-  const { average, peak } = useMemo(() => {
-    if (!selectedSeries.length) {
-      return {
-        average: 0,
-        peak: 0,
-      };
-    }
-
-    const total = selectedSeries.reduce((sum, point) => sum + point.value, 0);
-    return {
-      average: Math.round(total / selectedSeries.length),
-      peak: Math.max(...selectedSeries.map((point) => point.value)),
-    };
-  }, [selectedSeries]);
 
   const displayName =
     monitoring?.name ?? fallbackName ?? instanceId ?? "Instance";
@@ -215,28 +166,31 @@ export default function InstanceDetailScreen() {
   const displayType = monitoring?.type ?? fallbackType;
   const displayZone = monitoring?.zone ?? fallbackZone;
   const displayUpdatedAt =
-    monitoring?.updatedAt ??
-    selectedSeries[selectedSeries.length - 1]?.timestamp;
+    monitoring?.updatedAt ?? historySnapshot.latestTimestamp;
   const latestCpuValue =
-    monitoring?.cpuPercent ?? selectedSeries[selectedSeries.length - 1]?.value;
+    monitoring?.cpuPercent ?? historySnapshot.latestCpuPercent;
 
   useEffect(() => {
     if (!instanceId) {
       setMetricsError("This route is missing an instance id.");
       setMonitoring(null);
-      setLocalHistorySeries([]);
+      setHistorySnapshot(EMPTY_HISTORY_SNAPSHOT);
       return;
     }
 
     let isMounted = true;
 
     const loadCachedHistory = async () => {
-      const cachedSeries = await readCachedCpuHistory(instanceId, timeRange);
+      const cachedSnapshot = await readCachedCpuHistorySnapshot(
+        instanceId,
+        timeRange,
+        MAX_CHART_POINTS,
+      );
       if (!isMounted) {
         return;
       }
 
-      setLocalHistorySeries(cachedSeries);
+      setHistorySnapshot(cachedSnapshot);
     };
 
     const loadMetrics = async () => {
@@ -257,42 +211,49 @@ export default function InstanceDetailScreen() {
         }
 
         if (!result) {
-          const cachedSeries = await readCachedCpuHistory(
+          const cachedSnapshot = await readCachedCpuHistorySnapshot(
             instanceId,
             timeRange,
+            MAX_CHART_POINTS,
           );
           if (!isMounted) {
             return;
           }
 
           setMonitoring(null);
-          setLocalHistorySeries(cachedSeries);
+          setHistorySnapshot(cachedSnapshot);
           setMetricsError(
-            cachedSeries.length
+            cachedSnapshot.sampleCount
               ? `No live snapshot was returned for ${instanceId}. Showing saved history.`
               : `No live snapshot was returned for ${instanceId}.`,
           );
           return;
         }
 
-        setMonitoring(result);
-        const nextSeries = await cacheMonitoringHistory(result, timeRange);
-        if (!isMounted) {
-          return;
-        }
-
-        setLocalHistorySeries(
-          nextSeries.length ? nextSeries : result.cpuSeries,
+        const nextHistorySnapshot = await cacheMonitoringHistorySnapshot(
+          result,
+          timeRange,
+          MAX_CHART_POINTS,
         );
-      } catch {
-        const cachedSeries = await readCachedCpuHistory(instanceId, timeRange);
         if (!isMounted) {
           return;
         }
 
-        setLocalHistorySeries(cachedSeries);
+        setMonitoring(result);
+        setHistorySnapshot(nextHistorySnapshot);
+      } catch {
+        const cachedSnapshot = await readCachedCpuHistorySnapshot(
+          instanceId,
+          timeRange,
+          MAX_CHART_POINTS,
+        );
+        if (!isMounted) {
+          return;
+        }
+
+        setHistorySnapshot(cachedSnapshot);
         setMetricsError(
-          cachedSeries.length
+          cachedSnapshot.sampleCount
             ? `Could not refresh ${instanceId}. Showing saved history.`
             : `CloudWatch unavailable at ${activeApiBaseUrl || "the configured endpoint"}.`,
         );
@@ -467,9 +428,9 @@ export default function InstanceDetailScreen() {
             <Text style={styles.chartSubtitle}>
               Selected range: {timeRange}
             </Text>
-            {localHistorySeries.length > 0 ? (
+            {historySnapshot.sampleCount > 0 ? (
               <Text style={styles.cacheText}>
-                Chart history is being loaded from saved on-device samples.
+                Chart history is being rendered from saved on-device samples.
               </Text>
             ) : null}
             {apiBaseUrl ? (
@@ -485,16 +446,16 @@ export default function InstanceDetailScreen() {
           <View style={styles.chartStats}>
             <View style={styles.statBlock}>
               <Text style={styles.statLabel}>Avg</Text>
-              <Text style={styles.statValue}>{average}%</Text>
+              <Text style={styles.statValue}>{historySnapshot.average}%</Text>
             </View>
             <View style={styles.statBlock}>
               <Text style={styles.statLabel}>Peak</Text>
-              <Text style={styles.statValue}>{peak}%</Text>
+              <Text style={styles.statValue}>{historySnapshot.peak}%</Text>
             </View>
           </View>
         </View>
         <TimeRangeSelector value={timeRange} onChange={setTimeRange} />
-        <CpuUsageChart data={chartSeries} />
+        <CpuUsageChart data={historySnapshot.chartSeries} />
       </View>
     </ScrollView>
   );
