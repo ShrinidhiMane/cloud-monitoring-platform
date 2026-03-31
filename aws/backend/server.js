@@ -9,10 +9,6 @@ const POWER_ACTIONS = new Set(["start", "stop"]);
 const createAwsClients = () => ({
   ec2: new AWS.EC2()
 });
-
-//////////////////////////////////////////////////////////////
-// RULE VALIDATION
-//////////////////////////////////////////////////////////////
 const validateRule = (rule) => {
   const ipRanges = (rule.IpRanges || []).map(ip => ip.CidrIp);
 
@@ -33,9 +29,6 @@ const validateRule = (rule) => {
   };
 };
 
-//////////////////////////////////////////////////////////////
-// ✅ NEW: RISK CLASSIFICATION
-//////////////////////////////////////////////////////////////
 const classifyRisk = (rules) => {
   let hasPublic = false;
 
@@ -54,9 +47,6 @@ const classifyRisk = (rules) => {
   return "LOW";
 };
 
-//////////////////////////////////////////////////////////////
-// APP
-//////////////////////////////////////////////////////////////
 export const createApp = (clients = createAwsClients()) => {
   const { ec2 } = clients;
   const app = express();
@@ -64,17 +54,11 @@ export const createApp = (clients = createAwsClients()) => {
   app.use(cors());
   app.use(express.json());
 
-  //////////////////////////////////////////////////////////////
-  // ROOT
-  //////////////////////////////////////////////////////////////
   app.get("/", (req, res) => {
     console.log("ROOT HIT");
     res.send("Server working properly");
   });
 
-  //////////////////////////////////////////////////////////////
-  // ✅ UPDATED MONITORING API (WITH RISK)
-  //////////////////////////////////////////////////////////////
   app.get("/monitoring", async (req, res, next) => {
     try {
       console.log("Monitoring HIT");
@@ -97,7 +81,6 @@ export const createApp = (clients = createAwsClients()) => {
             inboundRules: inbound,
             outboundRules: outbound,
 
-            // ✅ NEW FIELD
             riskLevel
           };
         });
@@ -126,10 +109,6 @@ export const createApp = (clients = createAwsClients()) => {
       next(error);
     }
   });
-
-  //////////////////////////////////////////////////////////////
-  // POWER API
-  //////////////////////////////////////////////////////////////
   app.post("/instances/:instanceId/power", async (req, res, next) => {
     try {
       const { instanceId } = req.params;
@@ -168,16 +147,10 @@ export const createApp = (clients = createAwsClients()) => {
     }
   });
 
-  //////////////////////////////////////////////////////////////
-  // 404
-  //////////////////////////////////////////////////////////////
   app.use((req, res) => {
-    res.status(404).json({ error: "Route not found" });
+    res.status(404).json({ error: "Route was not found" });
   });
 
-  //////////////////////////////////////////////////////////////
-  // ERROR HANDLER
-  //////////////////////////////////////////////////////////////
   app.use((err, req, res, next) => {
     console.error("Backend Error:", err);
     res.status(500).json({
@@ -189,9 +162,6 @@ export const createApp = (clients = createAwsClients()) => {
   return app;
 };
 
-//////////////////////////////////////////////////////////////
-// SERVER START
-//////////////////////////////////////////////////////////////
 const PORT = 5000;
 
 if (process.env.NODE_ENV !== "test") {
