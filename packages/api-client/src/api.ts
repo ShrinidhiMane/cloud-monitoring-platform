@@ -73,37 +73,40 @@ interface MonitoringApiResponse {
   timestamp?: string;
 }
 
+const CPU_LABEL_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  hour: "numeric",
+  minute: "2-digit",
+});
+
 function roundMetricValue(value?: number): number {
   return Number((value ?? 0).toFixed(2));
 }
 
 function formatMetricLabel(timestamp: string): string {
-  return new Intl.DateTimeFormat("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(timestamp));
+  return CPU_LABEL_FORMATTER.format(new Date(timestamp));
 }
 
 function normalizeCpuSeries(
   points: MonitoringMetricPointResponse[] = [],
 ): CpuUsagePoint[] {
-  return points
-    .filter(
-      (
-        point,
-      ): point is Required<
-        Pick<MonitoringMetricPointResponse, "timestamp" | "value">
-      > => {
-        return (
-          typeof point.timestamp === "string" && typeof point.value === "number"
-        );
-      },
-    )
-    .map((point) => ({
+  const normalizedSeries: CpuUsagePoint[] = [];
+
+  for (const point of points) {
+    if (
+      typeof point.timestamp !== "string" ||
+      typeof point.value !== "number"
+    ) {
+      continue;
+    }
+
+    normalizedSeries.push({
       timestamp: point.timestamp,
       label: formatMetricLabel(point.timestamp),
       value: roundMetricValue(point.value),
-    }));
+    });
+  }
+
+  return normalizedSeries;
 }
 
 function normalizeMonitoringInstance(
