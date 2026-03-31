@@ -29,6 +29,24 @@ const validateRule = (rule) => {
   };
 };
 
+const classifyRisk = (rules) => {
+  let hasPublic = false;
+
+  for (const rule of rules) {
+    if (rule.isSSHOpenToWorld || rule.isAllTrafficOpen) {
+      return "HIGH";
+    }
+
+    if (rule.isPublic) {
+      hasPublic = true;
+    }
+  }
+
+  if (hasPublic) return "MEDIUM";
+
+  return "LOW";
+};
+
 export const createApp = (clients = createAwsClients()) => {
   const { ec2 } = clients;
   const app = express();
@@ -50,13 +68,22 @@ export const createApp = (clients = createAwsClients()) => {
       try {
         const sgData = await ec2.describeSecurityGroups().promise();
 
-        securityGroupsData = sgData.SecurityGroups.map(sg => ({
-          groupId: sg.GroupId,
-          groupName: sg.GroupName,
-          description: sg.Description,
-          inboundRules: (sg.IpPermissions || []).map(rule => validateRule(rule)),
-          outboundRules: (sg.IpPermissionsEgress || []).map(rule => validateRule(rule))
-        }));
+        securityGroupsData = sgData.SecurityGroups.map(sg => {
+          const inbound = (sg.IpPermissions || []).map(rule => validateRule(rule));
+          const outbound = (sg.IpPermissionsEgress || []).map(rule => validateRule(rule));
+
+          const riskLevel = classifyRisk([...inbound, ...outbound]);
+
+          return {
+            groupId: sg.GroupId,
+            groupName: sg.GroupName,
+            description: sg.Description,
+            inboundRules: inbound,
+            outboundRules: outbound,
+
+            riskLevel
+          };
+        });
 
       } catch (err) {
         console.error("Security Groups Error:", err.message);
@@ -66,7 +93,8 @@ export const createApp = (clients = createAwsClients()) => {
             groupId: "sg-mock",
             groupName: "mock-group",
             inboundRules: [],
-            outboundRules: []
+            outboundRules: [],
+            riskLevel: "LOW"
           }
         ];
       }
@@ -101,9 +129,12 @@ export const createApp = (clients = createAwsClients()) => {
       }
 
       const request = { InstanceIds: [instanceId] };
-      const response = action === "start"
-        ? await ec2.startInstances(request).promise()
-        : await ec2.stopInstances(request).promise();
+
+      if (action === "start") {
+        await ec2.startInstances(request).promise();
+      } else {
+        await ec2.stopInstances(request).promise();
+      }
 
       return res.status(200).json({
         instanceId,
@@ -115,9 +146,11 @@ export const createApp = (clients = createAwsClients()) => {
       return next(error);
     }
   });
+
   app.use((req, res) => {
-    res.status(404).json({ error: "Route not found" });
+    res.status(404).json({ error: "Route was not found" });
   });
+
   app.use((err, req, res, next) => {
     console.error("Backend Error:", err);
     res.status(500).json({
@@ -128,6 +161,7 @@ export const createApp = (clients = createAwsClients()) => {
 
   return app;
 };
+
 const PORT = 5000;
 
 if (process.env.NODE_ENV !== "test") {
