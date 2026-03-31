@@ -12,16 +12,15 @@ export default function App() {
   const translateAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    translateAnim.addListener((animValue: { value: number }) => {
-      if (animValue["value"] === 1) {
-        router.navigate("/tabs");
-      }
-    });
     Animated.timing(translateAnim, {
       toValue: 1,
       duration: 2000,
       useNativeDriver: false,
-    }).start();
+    }).start(({ finished }) => {
+      if (finished) {
+        router.replace("/tabs");
+      }
+    });
   }, [translateAnim, router]);
 
   return (

@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
-import { useLocalSearchParams } from "expo-router";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+
+import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 
 import { CpuUsageChart } from "@/components/CpuUsageChart";
 import {
@@ -151,6 +153,7 @@ function formatTimestamp(timestamp?: string): string {
 }
 
 export default function InstanceDetailScreen() {
+  const router = useRouter();
   const params = useLocalSearchParams<{
     id?: string | string[];
     name?: string | string[];
@@ -314,6 +317,31 @@ export default function InstanceDetailScreen() {
   if (!instanceId) {
     return (
       <View style={styles.emptyScreen}>
+        <Stack.Screen
+          options={{
+            title: "Instance Detail",
+            headerLeft: () => (
+              <Pressable
+                accessibilityLabel="Go back"
+                accessibilityRole="button"
+                hitSlop={10}
+                onPress={() => {
+                  router.replace("/tabs");
+                }}
+                style={({ pressed }) => [
+                  styles.headerBackButton,
+                  pressed && styles.headerBackButtonPressed,
+                ]}
+              >
+                <MaterialIcons
+                  color="#0F172A"
+                  name="arrow-back-ios-new"
+                  size={18}
+                />
+              </Pressable>
+            ),
+          }}
+        />
         <Text style={styles.title}>Instance unavailable</Text>
         <Text style={styles.subtitle}>
           Open this screen from the live instances list.
@@ -324,6 +352,36 @@ export default function InstanceDetailScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <Stack.Screen
+        options={{
+          title: "Instance Detail",
+          headerLeft: () => (
+            <Pressable
+              accessibilityLabel="Go back"
+              accessibilityRole="button"
+              hitSlop={10}
+              onPress={() => {
+                if (router.canGoBack()) {
+                  router.back();
+                  return;
+                }
+
+                router.replace("/tabs");
+              }}
+              style={({ pressed }) => [
+                styles.headerBackButton,
+                pressed && styles.headerBackButtonPressed,
+              ]}
+            >
+              <MaterialIcons
+                color="#0F172A"
+                name="arrow-back-ios-new"
+                size={18}
+              />
+            </Pressable>
+          ),
+        }}
+      />
       <View style={styles.header}>
         <Text style={styles.title}>{displayName}</Text>
         <Text style={styles.subtitle}>{displayId}</Text>
@@ -455,6 +513,13 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     padding: 24,
     gap: 8,
+  },
+  headerBackButton: {
+    paddingVertical: 4,
+    paddingRight: 8,
+  },
+  headerBackButtonPressed: {
+    opacity: 0.7,
   },
   header: {
     gap: 6,

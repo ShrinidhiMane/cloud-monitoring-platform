@@ -12,7 +12,7 @@ import { useColorScheme } from "@/hooks/use-color-scheme";
 import { hydrateApiBaseUrl } from "@/services/apiBaseUrl";
 
 export const unstable_settings = {
-  anchor: "(tabs)",
+  anchor: "tabs",
 };
 
 export default function RootLayout() {
