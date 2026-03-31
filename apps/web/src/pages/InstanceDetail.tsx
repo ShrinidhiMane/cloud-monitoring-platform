@@ -1,70 +1,147 @@
-import { useEffect, useMemo, useState } from "react";
+import {
+  startTransition,
+  useDeferredValue,
+  useEffect,
+  useEffectEvent,
+  useState,
+} from "react";
 import { useParams } from "react-router-dom";
 import { fetchInstanceMonitoring, type MonitoringInstance } from "api-client";
+import CpuLineChart from "../components/CpuLineChart";
 
-const RANGE_OPTIONS = ["1h", "6h", "24h", "7d"] as const;
-type RangeOption = (typeof RANGE_OPTIONS)[number];
+type TimeRangeOption = "15m" | "1h" | "6h" | "24h";
 
-function formatDate(value: string | null) {
-  if (!value) {
-    return "Not available";
+const RANGE_OPTIONS: Array<{ label: string; value: TimeRangeOption }> = [
+  { label: "15m", value: "15m" },
+  { label: "1h", value: "1h" },
+  { label: "6h", value: "6h" },
+  { label: "24h", value: "24h" },
+];
+const POLL_INTERVAL_MS = 15000;
+
+function formatPercent(value: number) {
+  return `${new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 1,
+  }).format(value)}%`;
+}
+
+function formatCompactNumber(value: number) {
+  return new Intl.NumberFormat("en-US", {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(value);
+}
+
+function formatAge(timestamp?: string) {
+  if (!timestamp) {
+    return "waiting for the first sample";
   }
 
-  return new Date(value).toLocaleString();
+  const diffMs = Date.now() - new Date(timestamp).getTime();
+  const diffSeconds = Math.max(Math.round(diffMs / 1000), 0);
+
+  if (diffSeconds < 60) {
+    return "just now";
+  }
+
+  const diffMinutes = Math.floor(diffSeconds / 60);
+  if (diffMinutes < 60) {
+    return `${diffMinutes}m ago`;
+  }
+
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) {
+    return `${diffHours}h ago`;
+  }
+
+  return `${Math.floor(diffHours / 24)}d ago`;
 }
 
 export default function InstanceDetail() {
   const { instanceId } = useParams();
-  const [range, setRange] = useState<RangeOption>("24h");
-  const [instance, setInstance] = useState<MonitoringInstance | null>(null);
+  const [timeRange, setTimeRange] = useState<TimeRangeOption>("1h");
+  const [monitoring, setMonitoring] = useState<MonitoringInstance | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const deferredCpuSeries = useDeferredValue(monitoring?.cpuSeries ?? []);
+
+  const loadMonitoring = useEffectEvent(async (backgroundRefresh = false) => {
+    if (!instanceId) {
+      setMonitoring(null);
+      setError("Missing instance id.");
+      setIsLoading(false);
+      setIsRefreshing(false);
+      return;
+    }
+
+    if (backgroundRefresh) {
+      setIsRefreshing(true);
+    } else {
+      setIsLoading(true);
+    }
+
+    try {
+      const result = await fetchInstanceMonitoring(instanceId, timeRange);
+
+      startTransition(() => {
+        setMonitoring(result);
+        setError(
+          result
+            ? null
+            : `No monitoring samples were returned for ${instanceId}.`,
+        );
+      });
+    } catch (loadError) {
+      const message =
+        loadError instanceof Error
+          ? loadError.message
+          : "Couldn't load monitoring data.";
+
+      startTransition(() => {
+        setError(
+          backgroundRefresh
+            ? `Refresh failed. Showing the last successful sample. ${message}`
+            : message,
+        );
+      });
+    } finally {
+      if (backgroundRefresh) {
+        setIsRefreshing(false);
+      } else {
+        setIsLoading(false);
+      }
+    }
+  });
 
   useEffect(() => {
-    let isMounted = true;
+    void loadMonitoring(false);
 
-    const loadInstance = async () => {
-      if (!instanceId) {
-        return;
-      }
+    if (!instanceId) {
+      return undefined;
+    }
 
-      try {
-        setIsLoading(true);
-        const response = await fetchInstanceMonitoring(instanceId, range);
-
-        if (!isMounted) {
-          return;
-        }
-
-        setInstance(response);
-        setError(response ? "" : "Instance not found in monitoring response.");
-      } catch (err) {
-        if (!isMounted) {
-          return;
-        }
-
-        setError(
-          err instanceof Error
-            ? err.message
-            : "Failed to load instance monitoring.",
-        );
-      } finally {
-        if (isMounted) {
-          setIsLoading(false);
-        }
-      }
-    };
-
-    loadInstance();
+    const intervalId = window.setInterval(() => {
+      void loadMonitoring(true);
+    }, POLL_INTERVAL_MS);
 
     return () => {
-      isMounted = false;
+      window.clearInterval(intervalId);
     };
-  }, [instanceId, range]);
+  }, [instanceId, timeRange]);
 
-  const chartPoints = useMemo(() => {
-    return (instance?.cpuSeries ?? []).slice(-12);
-  }, [instance]);
+  const sampleCount = deferredCpuSeries.length;
+  const averageCpu = sampleCount
+    ? deferredCpuSeries.reduce((sum, point) => sum + point.value, 0) /
+      sampleCount
+    : 0;
+  const peakCpu = sampleCount
+    ? Math.max(...deferredCpuSeries.map((point) => point.value))
+    : 0;
+  const title = monitoring?.name ?? instanceId ?? "Instance";
+  const refreshLabel = isRefreshing
+    ? "Refreshing now"
+    : `Last sample ${formatAge(monitoring?.updatedAt)}`;
 
   return (
     <div className="page">
@@ -72,150 +149,136 @@ export default function InstanceDetail() {
         <div className="page-header">
           <div>
             <div className="eyebrow">Instance Detail</div>
-            <h1 className="page-title">{instance?.name ?? instanceId ?? "Instance"}</h1>
+            <h1 className="page-title">{title}</h1>
             <p className="page-subtitle">
-              Live metrics, extended AWS details, and recent utilization.
+              Near real-time CPU graph with automatic refreshes every 15
+              seconds.
             </p>
           </div>
           <div className="header-actions">
+            <span className="live-pill">
+              {isRefreshing ? "Refreshing" : "Live"}
+            </span>
+            <span className="live-pill muted">{refreshLabel}</span>
+          </div>
+        </div>
+
+        <div className="detail-grid">
+          <div className="detail-card">
+            <div className="panel-title">State</div>
+            <div className="detail-value">{monitoring?.state ?? "loading"}</div>
+            <p className="detail-caption">
+              Status from the latest monitoring read.
+            </p>
+          </div>
+          <div className="detail-card">
+            <div className="panel-title">Instance Type</div>
+            <div className="detail-value">{monitoring?.type ?? "--"}</div>
+            <p className="detail-caption">Current compute profile.</p>
+          </div>
+          <div className="detail-card">
+            <div className="panel-title">Availability Zone</div>
+            <div className="detail-value">{monitoring?.zone ?? "--"}</div>
+            <p className="detail-caption">Placement reported by EC2.</p>
+          </div>
+          <div className="detail-card">
+            <div className="panel-title">Memory</div>
+            <div className="detail-value">
+              {formatPercent(monitoring?.memoryPercent ?? 0)}
+            </div>
+            <p className="detail-caption">Latest CWAgent memory percentage.</p>
+          </div>
+        ) : null}
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <div className="panel-title">CPU Utilization</div>
+            <p className="page-subtitle">
+              Polling CloudWatch on a short interval and redrawing the graph as
+              new samples land.
+            </p>
+          </div>
+          <div className="range-selector" aria-label="CPU range selector">
             {RANGE_OPTIONS.map((option) => (
               <button
-                key={option}
-                className={`btn${range === option ? " primary" : " ghost"}`}
+                key={option.value}
                 type="button"
-                onClick={() => setRange(option)}
+                className={`range-chip${timeRange === option.value ? " active" : ""}`}
+                onClick={() => setTimeRange(option.value)}
               >
-                {option}
+                {option.label}
               </button>
             ))}
           </div>
         </div>
 
-        {isLoading ? <p className="page-subtitle">Loading instance monitoring...</p> : null}
-        {error ? <p className="page-subtitle" style={{ color: "#B91C1C" }}>{error}</p> : null}
+        <div className={`status-banner${error ? " error" : ""}`}>
+          {error
+            ? error
+            : isLoading && !monitoring
+              ? "Loading monitoring data..."
+              : `${sampleCount} CPU samples loaded. ${refreshLabel}.`}
+        </div>
 
-        {instance ? (
-          <div className="detail-grid">
-            <div className="detail-card">
-              <div className="panel-title">Health</div>
-              <p className="page-subtitle">
-                State: {instance.state}, Status checks failed: {instance.statusCheckFailed}
-              </p>
+        {isLoading && !monitoring ? (
+          <div className="cpu-chart-empty">Loading CPU samples...</div>
+        ) : (
+          <CpuLineChart data={deferredCpuSeries} />
+        )}
+
+        <div className="metric-grid">
+          <div className="metric-card">
+            <div className="metric-label">Current CPU</div>
+            <div className="metric-value">
+              {formatPercent(monitoring?.cpuPercent ?? 0)}
             </div>
-            <div className="detail-card">
-              <div className="panel-title">Configuration</div>
-              <p className="page-subtitle">
-                {instance.type} · {instance.availabilityZone ?? "N/A"} · Image:{" "}
-                {instance.imageId ?? "N/A"}
-              </p>
-            </div>
-            <div className="detail-card">
-              <div className="panel-title">Network</div>
-              <p className="page-subtitle">
-                Public IP: {instance.publicIp ?? "Private only"}<br />
-                Launched: {formatDate(instance.launchedAt)}
-              </p>
-            </div>
+            <div className="metric-note">Latest datapoint</div>
           </div>
-        ) : null}
+          <div className="metric-card">
+            <div className="metric-label">Average</div>
+            <div className="metric-value">{formatPercent(averageCpu)}</div>
+            <div className="metric-note">Across the selected range</div>
+          </div>
+          <div className="metric-card">
+            <div className="metric-label">Peak</div>
+            <div className="metric-value">{formatPercent(peakCpu)}</div>
+            <div className="metric-note">Highest observed spike</div>
+          </div>
+          <div className="metric-card">
+            <div className="metric-label">Network In</div>
+            <div className="metric-value">
+              {formatCompactNumber(monitoring?.networkInBytes ?? 0)}
+            </div>
+            <div className="metric-note">Bytes in the latest period</div>
+          </div>
+        </div>
       </section>
 
       <section className="panel">
         <div className="panel-header">
-          <div className="panel-title">CPU Utilization</div>
-          <button className="btn ghost" type="button">
-            Range: {range}
-          </button>
+          <div className="panel-title">Recent Metrics</div>
+          <span className="status-inline">Auto-refresh every 15s</span>
         </div>
-
-        {instance ? (
-          <>
-            <div className="detail-grid" style={{ marginBottom: 16 }}>
-              <div className="detail-card">
-                <div className="panel-title">CPU</div>
-                <p className="page-subtitle">{instance.cpuPercent}% current usage</p>
-              </div>
-              <div className="detail-card">
-                <div className="panel-title">Memory</div>
-                <p className="page-subtitle">{instance.memoryPercent}% current usage</p>
-              </div>
-              <div className="detail-card">
-                <div className="panel-title">Disk</div>
-                <p className="page-subtitle">
-                  Read: {instance.diskReadOps}, Write: {instance.diskWriteOps}
-                </p>
-              </div>
-            </div>
-
-            <div
-              className="chart-placeholder"
-              style={{
-                display: "flex",
-                alignItems: "flex-end",
-                gap: 8,
-                padding: 20,
-              }}
-            >
-              {chartPoints.length ? (
-                chartPoints.map((point) => (
-                  <div
-                    key={`${point.timestamp}-${point.label}`}
-                    style={{
-                      flex: 1,
-                      display: "flex",
-                      flexDirection: "column",
-                      justifyContent: "flex-end",
-                      alignItems: "center",
-                      gap: 8,
-                      height: "100%",
-                    }}
-                  >
-                    <div
-                      style={{
-                        width: "100%",
-                        maxWidth: 26,
-                        borderRadius: 999,
-                        background:
-                          "linear-gradient(180deg, rgba(28,139,122,0.95), rgba(224,122,47,0.9))",
-                        height: `${Math.max(point.value, 4)}%`,
-                        minHeight: 12,
-                      }}
-                    />
-                    <span style={{ fontSize: 11, color: "#5B554B" }}>{point.label}</span>
-                  </div>
-                ))
-              ) : (
-                <div className="page-subtitle">No CPU series available for this range.</div>
-              )}
-            </div>
-          </>
-        ) : null}
-      </section>
-
-      <section className="panel">
-        <div className="panel-header">
-          <div className="panel-title">Traffic Summary</div>
-          <button className="btn ghost" type="button">
-            Live
-          </button>
-        </div>
-
-        {instance ? (
-          <div className="event-list">
-            <div className="event-item">
-              <div>Network In</div>
-              <div>{instance.networkInBytes}</div>
-            </div>
-            <div className="event-item">
-              <div>Network Out</div>
-              <div>{instance.networkOutBytes}</div>
-            </div>
-            <div className="event-item">
-              <div>Monitoring ID</div>
-              <div>{instance.instanceId}</div>
-            </div>
+        <div className="event-list">
+          <div className="event-item">
+            <div>Network Out</div>
+            <div>{formatCompactNumber(monitoring?.networkOutBytes ?? 0)}</div>
           </div>
-        ) : null}
+          <div className="event-item">
+            <div>Disk Reads</div>
+            <div>{formatCompactNumber(monitoring?.diskReadOps ?? 0)}</div>
+          </div>
+          <div className="event-item">
+            <div>Disk Writes</div>
+            <div>{formatCompactNumber(monitoring?.diskWriteOps ?? 0)}</div>
+          </div>
+          <div className="event-item">
+            <div>Last Updated</div>
+            <div>{formatAge(monitoring?.updatedAt)}</div>
+          </div>
+        </div>
       </section>
     </div>
   );

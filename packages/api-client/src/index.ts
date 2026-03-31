@@ -1,6 +1,20 @@
-import { API_URL, getApiBaseUrl, setApiBaseUrl } from "./constants";
+import {
+  API_URL,
+  MONITORING_PATH,
+  MONITORING_URL,
+  getApiBaseUrl,
+  getMonitoringUrl,
+  setApiBaseUrl,
+} from "./constants";
 
-export { API_URL, getApiBaseUrl, setApiBaseUrl };
+export {
+  API_URL,
+  MONITORING_PATH,
+  MONITORING_URL,
+  getApiBaseUrl,
+  getMonitoringUrl,
+  setApiBaseUrl,
+};
 
 export * from "./api";
 export { createApiClient } from "./openapi/client";

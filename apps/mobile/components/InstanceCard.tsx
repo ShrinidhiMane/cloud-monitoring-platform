@@ -1,8 +1,6 @@
 import React from "react";
 import { StyleSheet, Text, View } from "react-native";
-
-import { InstanceMetricsGrid } from "@/components/InstanceMetricsGrid";
-import type { InstanceState, MonitoringInstance } from "@/services/apiClient";
+import type { InstanceState, InstanceSummary } from "api-client";
 
 const STATE_COLORS: Record<InstanceState, { bg: string; text: string }> = {
   pending: { bg: "#FEF3C7", text: "#92400E" },

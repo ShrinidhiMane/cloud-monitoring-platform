@@ -1,99 +1,110 @@
-import { useEffect, useMemo, useState } from "react";
+import { startTransition, useEffect, useEffectEvent, useState } from "react";
 import { Link } from "react-router-dom";
-import { fetchMonitoring, type MonitoringInstance } from "api-client";
+import { fetchMonitoringOverview, type MonitoringInstance } from "api-client";
 
-function formatTimestamp(value?: string) {
-  if (!value) {
-    return "Not available";
+const POLL_INTERVAL_MS = 30000;
+
+function formatPercent(value: number) {
+  return `${new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 1,
+  }).format(value)}%`;
+}
+
+function formatAge(timestamp?: string | null) {
+  if (!timestamp) {
+    return "waiting for the first sync";
   }
 
-  return new Date(value).toLocaleString();
+  const diffMs = Date.now() - new Date(timestamp).getTime();
+  const diffSeconds = Math.max(Math.round(diffMs / 1000), 0);
+
+  if (diffSeconds < 60) {
+    return "just now";
+  }
+
+  const diffMinutes = Math.floor(diffSeconds / 60);
+  if (diffMinutes < 60) {
+    return `${diffMinutes}m ago`;
+  }
+
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) {
+    return `${diffHours}h ago`;
+  }
+
+  return `${Math.floor(diffHours / 24)}d ago`;
 }
 
 export default function Instances() {
   const [instances, setInstances] = useState<MonitoringInstance[]>([]);
-  const [search, setSearch] = useState("");
-  const [lastUpdated, setLastUpdated] = useState<string>("");
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null);
 
-  useEffect(() => {
-    let isMounted = true;
-
-    const loadMonitoring = async () => {
-      try {
-        if (isMounted && !instances.length) {
-          setIsLoading(true);
-        }
-
-        const response = await fetchMonitoring("1h");
-
-        if (!isMounted) {
-          return;
-        }
-
-        setInstances(response.instances);
-        setLastUpdated(response.timestamp);
-        setError("");
-      } catch (err) {
-        if (!isMounted) {
-          return;
-        }
-
-        setError(
-          err instanceof Error
-            ? err.message
-            : "Failed to load monitoring data.",
-        );
-      } finally {
-        if (isMounted) {
-          setIsLoading(false);
-        }
-      }
-    };
-
-    loadMonitoring();
-    const intervalId = window.setInterval(loadMonitoring, 30000);
-
-    return () => {
-      isMounted = false;
-      window.clearInterval(intervalId);
-    };
-  }, [instances.length]);
-
-  const filteredInstances = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    if (!query) {
-      return instances;
+  const loadInstances = useEffectEvent(async (backgroundRefresh = false) => {
+    if (!backgroundRefresh) {
+      setIsLoading(true);
     }
 
-    return instances.filter((instance) => {
-      return [
-        instance.name,
-        instance.id,
-        instance.instanceId,
-        instance.type,
-        instance.availabilityZone ?? "",
-      ]
-        .join(" ")
-        .toLowerCase()
-        .includes(query);
-    });
-  }, [instances, search]);
+    try {
+      const response = await fetchMonitoringOverview("1h");
 
-  const stats = useMemo(() => {
-    const running = instances.filter((item) => item.state === "running").length;
-    const stopped = instances.filter((item) => item.state === "stopped").length;
-    const pending = instances.filter((item) => item.state === "pending").length;
-    const alerts = instances.filter((item) => item.statusCheckFailed > 0).length;
+      startTransition(() => {
+        setInstances(response.instances);
+        setLastUpdated(response.timestamp);
+        setError(null);
+      });
+    } catch (loadError) {
+      const message =
+        loadError instanceof Error
+          ? loadError.message
+          : "Couldn't refresh the instance overview.";
 
-    return [
-      { label: "Running", value: String(running) },
-      { label: "Stopped", value: String(stopped) },
-      { label: "Pending", value: String(pending) },
-      { label: "Alerts", value: String(alerts) },
-    ];
-  }, [instances]);
+      startTransition(() => {
+        setError(message);
+      });
+    } finally {
+      if (!backgroundRefresh) {
+        setIsLoading(false);
+      }
+    }
+  });
+
+  useEffect(() => {
+    void loadInstances(false);
+
+    const intervalId = window.setInterval(() => {
+      void loadInstances(true);
+    }, POLL_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, []);
+
+  const runningCount = instances.filter(
+    (instance) => instance.state === "running",
+  ).length;
+  const stoppedCount = instances.filter(
+    (instance) => instance.state === "stopped",
+  ).length;
+  const pendingCount = instances.filter(
+    (instance) => instance.state === "pending",
+  ).length;
+  const alertCount = instances.filter((instance) => {
+    return instance.cpuPercent >= 80 || instance.memoryPercent >= 80;
+  }).length;
+  const statCards = [
+    { label: "Running", value: String(runningCount) },
+    { label: "Stopped", value: String(stoppedCount) },
+    { label: "Pending", value: String(pendingCount) },
+    { label: "Alerts", value: String(alertCount) },
+  ];
+  const statusText = error
+    ? error
+    : isLoading && !instances.length
+      ? "Loading live EC2 metrics..."
+      : `Last sync ${formatAge(lastUpdated)}. Refreshes every 30s.`;
 
   return (
     <div className="page">
@@ -103,19 +114,13 @@ export default function Instances() {
             <div className="eyebrow">Infrastructure Overview</div>
             <h1 className="page-title">Instance Control Center</h1>
             <p className="page-subtitle">
-              Monitor health, usage, and performance across your EC2 fleet.
-            </p>
-            <p className="page-subtitle" style={{ marginTop: 8 }}>
-              Last refreshed: {formatTimestamp(lastUpdated)}
+              Monitor live instance health, follow CPU and memory pressure, and
+              drill into a near real-time graph from the detail page.
             </p>
           </div>
           <div className="header-actions">
-            <button className="btn ghost" type="button">
-              Auto refresh: 30s
-            </button>
-            <button className="btn primary" type="button">
-              Live Monitoring
-            </button>
+            <span className="live-pill">Live Fleet</span>
+            <span className="live-pill muted">{statusText}</span>
           </div>
         </div>
 
@@ -131,74 +136,89 @@ export default function Instances() {
 
       <section className="panel">
         <div className="panel-header">
-          <div className="panel-title">Instances</div>
-          <input
-            className="search"
-            placeholder="Search by name, type, zone, or ID"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-          />
+          <div>
+            <div className="panel-title">Instances</div>
+            <p className="page-subtitle">
+              Cards refresh in the background so you can jump into a live graph
+              without a manual reload.
+            </p>
+          </div>
+          <div className={`status-inline${error ? " error" : ""}`}>
+            {statusText}
+          </div>
         </div>
 
-        {isLoading ? <p className="page-subtitle">Loading live monitoring data...</p> : null}
-        {error ? <p className="page-subtitle" style={{ color: "#B91C1C" }}>{error}</p> : null}
-
-        {!isLoading && !filteredInstances.length ? (
-          <p className="page-subtitle">No instances matched your search.</p>
+        {isLoading && !instances.length ? (
+          <div className="cpu-chart-empty">Loading instances...</div>
         ) : null}
 
-        <div className="card-grid">
-          {filteredInstances.map((instance) => (
-            <article key={instance.id} className="instance-card">
-              <div className="instance-header">
-                <div>
-                  <div className="instance-name">{instance.name}</div>
-                  <div className="instance-id">{instance.instanceId}</div>
+        {!isLoading && !instances.length ? (
+          <div className="cpu-chart-empty">
+            {error ??
+              "No running instances were returned by the monitoring API."}
+          </div>
+        ) : null}
+
+        {instances.length ? (
+          <div className="card-grid">
+            {instances.map((instance) => (
+              <article key={instance.id} className="instance-card">
+                <div className="instance-header">
+                  <div>
+                    <div className="instance-name">{instance.name}</div>
+                    <div className="instance-id">{instance.id}</div>
+                  </div>
+                  <span className="status-pill" data-state={instance.state}>
+                    {instance.state}
+                  </span>
                 </div>
-                <span className="status-pill" data-state={instance.state}>
-                  {instance.state}
-                </span>
-              </div>
-
-              <div className="instance-meta">
-                <div>Type: {instance.type}</div>
-                <div>Zone: {instance.availabilityZone ?? "N/A"}</div>
-                <div>Public IP: {instance.publicIp ?? "Private only"}</div>
-                <div>Status checks: {instance.statusCheckFailed}</div>
-              </div>
-
-              <div className="meter">
-                <div>CPU</div>
-                <div>{instance.cpuPercent}%</div>
-                <div className="meter-bar">
-                  <span style={{ width: `${Math.min(instance.cpuPercent, 100)}%` }} />
+                <div className="instance-meta">
+                  <div>Type: {instance.type}</div>
+                  <div>Zone: {instance.zone ?? "unknown"}</div>
                 </div>
-              </div>
-
-              <div className="meter">
-                <div>Memory</div>
-                <div>{instance.memoryPercent}%</div>
-                <div className="meter-bar">
-                  <span
-                    style={{ width: `${Math.min(instance.memoryPercent, 100)}%` }}
-                  />
+                <div className="meter">
+                  <div>CPU</div>
+                  <div>{formatPercent(instance.cpuPercent)}</div>
+                  <div className="meter-bar">
+                    <span
+                      style={{
+                        width: `${Math.min(instance.cpuPercent, 100)}%`,
+                      }}
+                    />
+                  </div>
                 </div>
-              </div>
-
-              <div className="card-actions">
-                <button className="btn ghost" type="button">
-                  Net In: {instance.networkInBytes}
-                </button>
-                <button className="btn ghost" type="button">
-                  Net Out: {instance.networkOutBytes}
-                </button>
-                <Link className="btn primary" to={`/instances/${instance.id}`}>
-                  Details
-                </Link>
-              </div>
-            </article>
-          ))}
-        </div>
+                <div className="meter">
+                  <div>Memory</div>
+                  <div>{formatPercent(instance.memoryPercent)}</div>
+                  <div className="meter-bar">
+                    <span
+                      style={{
+                        width: `${Math.min(instance.memoryPercent, 100)}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+                <div className="card-actions">
+                  <button className="btn ghost" type="button">
+                    Start
+                  </button>
+                  <button className="btn ghost" type="button">
+                    Stop
+                  </button>
+                  <button className="btn" type="button">
+                    Reboot
+                  </button>
+                  <Link
+                    className="btn primary"
+                    to={`/instances/${instance.id}`}
+                  >
+                    Details
+                  </Link>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : null}
       </section>
     </div>
   );

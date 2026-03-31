@@ -1,12 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
-import {
-  ActivityIndicator,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
-import { useLocalSearchParams } from "expo-router";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+
+import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 
 import { CpuUsageChart } from "@/components/CpuUsageChart";
 import { InstanceMetricsGrid } from "@/components/InstanceMetricsGrid";
@@ -15,14 +11,27 @@ import {
   TimeRangeSelector,
   type TimeRangeOption,
 } from "@/components/TimeRangeSelector";
-import { mockCpuSeries } from "@/data/mockCpuSeries";
-import { mockInstances } from "@/data/mockInstances";
+import { hydrateApiBaseUrl } from "@/services/apiBaseUrl";
 import {
+  cacheMonitoringHistory,
+  readCachedCpuHistory,
+} from "@/services/metricsHistory";
+import {
+  type CpuUsagePoint,
   fetchInstanceMonitoring,
   type InstanceState,
   type MonitoringInstance,
-  type MonitoringMetrics,
-} from "@/services/apiClient";
+  type InstanceState,
+} from "api-client";
+
+const INSTANCE_STATES: InstanceState[] = [
+  "pending",
+  "running",
+  "stopping",
+  "stopped",
+  "shutting-down",
+  "terminated",
+];
 
 const STATE_COLORS: Record<InstanceState, { bg: string; text: string }> = {
   pending: { bg: "#FEF3C7", text: "#92400E" },
@@ -42,6 +51,119 @@ const EMPTY_METRICS: MonitoringMetrics = {
   diskReadOps: 0,
   diskWriteOps: 0,
 };
+const POLL_INTERVAL_MS = 30_000;
+const MAX_CHART_POINTS = 24;
+
+interface MetricTileProps {
+  label: string;
+  value: string;
+}
+
+function MetricTile({ label, value }: MetricTileProps) {
+  return (
+    <View style={styles.metricTile}>
+      <Text style={styles.metricLabel}>{label}</Text>
+      <Text numberOfLines={1} style={styles.metricValue}>
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+function readRouteParam(value?: string | string[]): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function parseInstanceState(value?: string): InstanceState | null {
+  if (!value) {
+    return null;
+  }
+
+  return INSTANCE_STATES.includes(value as InstanceState)
+    ? (value as InstanceState)
+    : null;
+}
+
+function downsampleSeries(
+  series: CpuUsagePoint[],
+  maxPoints = MAX_CHART_POINTS,
+): CpuUsagePoint[] {
+  if (series.length <= maxPoints) {
+    return series;
+  }
+
+  const bucketSize = Math.ceil(series.length / maxPoints);
+  const compressedSeries: CpuUsagePoint[] = [];
+
+  for (let index = 0; index < series.length; index += bucketSize) {
+    const bucket = series.slice(index, index + bucketSize);
+    const latestPoint = bucket[bucket.length - 1];
+    const averageValue =
+      bucket.reduce((sum, point) => sum + point.value, 0) / bucket.length;
+
+    compressedSeries.push({
+      timestamp: latestPoint.timestamp,
+      label: latestPoint.label,
+      value: Math.round(averageValue),
+    });
+  }
+
+  return compressedSeries;
+}
+
+function formatPercent(value?: number): string {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return "Unavailable";
+  }
+
+  return `${Number(value.toFixed(2))}%`;
+}
+
+function formatCompactNumber(value?: number): string {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return "Unavailable";
+  }
+
+  return new Intl.NumberFormat("en-US", {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(value);
+}
+
+function formatBytes(value?: number): string {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return "Unavailable";
+  }
+
+  if (value === 0) {
+    return "0 B";
+  }
+
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const exponent = Math.min(
+    Math.floor(Math.log(value) / Math.log(1024)),
+    units.length - 1,
+  );
+  const normalized = value / 1024 ** exponent;
+
+  return `${normalized.toFixed(normalized >= 100 ? 0 : 1)} ${units[exponent]}`;
+}
+
+function formatTimestamp(timestamp?: string): string {
+  if (!timestamp) {
+    return "Unavailable";
+  }
+
+  const parsedTimestamp = new Date(timestamp);
+  if (Number.isNaN(parsedTimestamp.getTime())) {
+    return "Unavailable";
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(parsedTimestamp);
+}
 
 const VALID_STATES: InstanceState[] = [
   "pending",
@@ -53,85 +175,146 @@ const VALID_STATES: InstanceState[] = [
 ];
 
 export default function InstanceDetailScreen() {
+  const router = useRouter();
   const params = useLocalSearchParams<{
     id?: string | string[];
     name?: string | string[];
     state?: string | string[];
     type?: string | string[];
+    zone?: string | string[];
   }>();
-
-  const instanceId = getParamValue(params.id);
-  const routeName = getParamValue(params.name);
-  const routeState = getParamValue(params.state);
-  const routeType = getParamValue(params.type);
+  const instanceId = readRouteParam(params.id);
+  const fallbackName = readRouteParam(params.name);
+  const fallbackState = parseInstanceState(readRouteParam(params.state));
+  const fallbackType = readRouteParam(params.type);
+  const fallbackZone = readRouteParam(params.zone) || undefined;
 
   const [timeRange, setTimeRange] = useState<TimeRangeOption>("1h");
   const [monitoring, setMonitoring] = useState<MonitoringInstance | null>(null);
-  const [isLoadingMetrics, setIsLoadingMetrics] = useState(true);
-  const [isUsingMockData, setIsUsingMockData] = useState(false);
-  const [mockReason, setMockReason] = useState<string | null>(null);
-
-  const fallbackInstance = useMemo(
-    () =>
-      buildFallbackInstance({
-        id: instanceId,
-        name: routeName,
-        state: routeState,
-        type: routeType,
-      }),
-    [instanceId, routeName, routeState, routeType],
+  const [isLoadingMetrics, setIsLoadingMetrics] = useState(false);
+  const [metricsError, setMetricsError] = useState<string | null>(null);
+  const [localHistorySeries, setLocalHistorySeries] = useState<CpuUsagePoint[]>(
+    [],
   );
+  const [apiBaseUrl, setCurrentApiBaseUrl] = useState("");
+  const remoteRange = timeRange === "7d" ? "24h" : timeRange;
 
-  const displayInstance = monitoring ?? fallbackInstance;
-  const stateStyle = STATE_COLORS[displayInstance.state];
-  const averageCpu = Math.round(
-    mockCpuSeries.reduce((sum, point) => sum + point.value, 0) /
-      mockCpuSeries.length,
-  );
-  const peakCpu = Math.max(...mockCpuSeries.map((point) => point.value));
+  const selectedSeries = useMemo(() => {
+    if (localHistorySeries.length) {
+      return localHistorySeries;
+    }
+
+    if (monitoring?.cpuSeries.length) {
+      return monitoring.cpuSeries;
+    }
+
+    return [];
+  }, [localHistorySeries, monitoring]);
+  const chartSeries = useMemo(() => {
+    return downsampleSeries(selectedSeries);
+  }, [selectedSeries]);
+  const { average, peak } = useMemo(() => {
+    if (!selectedSeries.length) {
+      return {
+        average: 0,
+        peak: 0,
+      };
+    }
+
+    const total = selectedSeries.reduce((sum, point) => sum + point.value, 0);
+    return {
+      average: Math.round(total / selectedSeries.length),
+      peak: Math.max(...selectedSeries.map((point) => point.value)),
+    };
+  }, [selectedSeries]);
+
+  const displayName =
+    monitoring?.name ?? fallbackName ?? instanceId ?? "Instance";
+  const displayId = monitoring?.id ?? instanceId ?? "Unknown instance";
+  const displayState = monitoring?.state ?? fallbackState;
+  const displayType = monitoring?.type ?? fallbackType;
+  const displayZone = monitoring?.zone ?? fallbackZone;
+  const displayUpdatedAt =
+    monitoring?.updatedAt ??
+    selectedSeries[selectedSeries.length - 1]?.timestamp;
+  const latestCpuValue =
+    monitoring?.cpuPercent ?? selectedSeries[selectedSeries.length - 1]?.value;
 
   useEffect(() => {
+    if (!instanceId) {
+      setMetricsError("This route is missing an instance id.");
+      setMonitoring(null);
+      setLocalHistorySeries([]);
+      return;
+    }
+
     let isMounted = true;
 
-    async function loadInstanceMonitoring() {
-      setIsLoadingMetrics(true);
-      setMockReason(null);
-
-      if (!instanceId) {
-        setMonitoring(fallbackInstance);
-        setIsUsingMockData(true);
-        setMockReason(
-          "Mock data is active because no instance id was provided to load live monitoring.",
-        );
-        setIsLoadingMetrics(false);
+    const loadCachedHistory = async () => {
+      const cachedSeries = await readCachedCpuHistory(instanceId, timeRange);
+      if (!isMounted) {
         return;
       }
 
+      setLocalHistorySeries(cachedSeries);
+    };
+
+    const loadMetrics = async () => {
+      setIsLoadingMetrics(true);
+      setMetricsError(null);
+      let activeApiBaseUrl = "";
+
       try {
-        const result = await fetchInstanceMonitoring(instanceId, timeRange);
+        activeApiBaseUrl = await hydrateApiBaseUrl();
         if (!isMounted) {
           return;
         }
 
-        if (result) {
-          setMonitoring(result);
-          setIsUsingMockData(false);
-        } else {
-          setMonitoring(fallbackInstance);
-          setIsUsingMockData(true);
-          setMockReason(
-            "Mock data is active because this instance was not found in the live monitoring response.",
+        setCurrentApiBaseUrl(activeApiBaseUrl);
+        const result = await fetchInstanceMonitoring(instanceId, remoteRange);
+        if (!isMounted) {
+          return;
+        }
+
+        if (!result) {
+          const cachedSeries = await readCachedCpuHistory(
+            instanceId,
+            timeRange,
           );
+          if (!isMounted) {
+            return;
+          }
+
+          setMonitoring(null);
+          setLocalHistorySeries(cachedSeries);
+          setMetricsError(
+            cachedSeries.length
+              ? `No live snapshot was returned for ${instanceId}. Showing saved history.`
+              : `No live snapshot was returned for ${instanceId}.`,
+          );
+          return;
         }
-      } catch {
+
+        setMonitoring(result);
+        const nextSeries = await cacheMonitoringHistory(result, timeRange);
         if (!isMounted) {
           return;
         }
 
-        setMonitoring(fallbackInstance);
-        setIsUsingMockData(true);
-        setMockReason(
-          "Mock data is active because the live monitoring server could not be reached.",
+        setLocalHistorySeries(
+          nextSeries.length ? nextSeries : result.cpuSeries,
+        );
+      } catch {
+        const cachedSeries = await readCachedCpuHistory(instanceId, timeRange);
+        if (!isMounted) {
+          return;
+        }
+
+        setLocalHistorySeries(cachedSeries);
+        setMetricsError(
+          cachedSeries.length
+            ? `Could not refresh ${instanceId}. Showing saved history.`
+            : `CloudWatch unavailable at ${activeApiBaseUrl || "the configured endpoint"}.`,
         );
       } finally {
         if (isMounted) {
@@ -140,34 +323,90 @@ export default function InstanceDetailScreen() {
       }
     }
 
-    loadInstanceMonitoring();
+    void loadCachedHistory();
+    void loadMetrics();
+
+    const pollId = setInterval(() => {
+      void loadMetrics();
+    }, POLL_INTERVAL_MS);
 
     return () => {
       isMounted = false;
+      clearInterval(pollId);
     };
-  }, [instanceId, fallbackInstance, timeRange]);
+  }, [instanceId, remoteRange, timeRange]);
 
-  const selectedSeries =
-    monitoring?.cpuSeries?.length ? monitoring.cpuSeries : mockCpuSeries;
-
-  const { average, peak } = useMemo(() => {
-    const total = selectedSeries.reduce((sum, point) => sum + point.value, 0);
-
-    return {
-      average: Math.round(total / selectedSeries.length),
-      peak: Math.max(...selectedSeries.map((point) => point.value)),
-    };
-  }, [selectedSeries]);
-
-  const displayState: InstanceState = monitoring?.state ?? instance.state;
-  const displayType = monitoring?.type ?? instance.type;
-  const stateStyle = STATE_COLORS[displayState];
+  if (!instanceId) {
+    return (
+      <View style={styles.emptyScreen}>
+        <Stack.Screen
+          options={{
+            title: "Instance Detail",
+            headerLeft: () => (
+              <Pressable
+                accessibilityLabel="Go back"
+                accessibilityRole="button"
+                hitSlop={10}
+                onPress={() => {
+                  router.replace("/tabs");
+                }}
+                style={({ pressed }) => [
+                  styles.headerBackButton,
+                  pressed && styles.headerBackButtonPressed,
+                ]}
+              >
+                <MaterialIcons
+                  color="#0F172A"
+                  name="arrow-back-ios-new"
+                  size={18}
+                />
+              </Pressable>
+            ),
+          }}
+        />
+        <Text style={styles.title}>Instance unavailable</Text>
+        <Text style={styles.subtitle}>
+          Open this screen from the live instances list.
+        </Text>
+      </View>
+    );
+  }
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <Stack.Screen
+        options={{
+          title: "Instance Detail",
+          headerLeft: () => (
+            <Pressable
+              accessibilityLabel="Go back"
+              accessibilityRole="button"
+              hitSlop={10}
+              onPress={() => {
+                if (router.canGoBack()) {
+                  router.back();
+                  return;
+                }
+
+                router.replace("/tabs");
+              }}
+              style={({ pressed }) => [
+                styles.headerBackButton,
+                pressed && styles.headerBackButtonPressed,
+              ]}
+            >
+              <MaterialIcons
+                color="#0F172A"
+                name="arrow-back-ios-new"
+                size={18}
+              />
+            </Pressable>
+          ),
+        }}
+      />
       <View style={styles.header}>
-        <Text style={styles.title}>{displayInstance.name}</Text>
-        <Text style={styles.subtitle}>{displayInstance.id}</Text>
+        <Text style={styles.title}>{displayName}</Text>
+        <Text style={styles.subtitle}>{displayId}</Text>
       </View>
 
       {isLoadingMetrics && !monitoring && (
@@ -189,50 +428,97 @@ export default function InstanceDetailScreen() {
       <View style={styles.summaryCard}>
         <View style={styles.summaryRow}>
           <Text style={styles.summaryLabel}>State</Text>
-          <View
-            style={[styles.statePill, { backgroundColor: stateStyle.bg }]}
-            accessibilityLabel={`Instance state ${displayInstance.state}`}
-          >
-            <Text style={[styles.stateText, { color: stateStyle.text }]}>
-              {displayInstance.state}
-            </Text>
-          </View>
+          {displayState ? (
+            <View
+              style={[
+                styles.statePill,
+                { backgroundColor: STATE_COLORS[displayState].bg },
+              ]}
+              accessibilityLabel={`Instance state ${displayState}`}
+            >
+              <Text
+                style={[
+                  styles.stateText,
+                  { color: STATE_COLORS[displayState].text },
+                ]}
+              >
+                {displayState}
+              </Text>
+            </View>
+          ) : (
+            <Text style={styles.summaryValue}>Unavailable</Text>
+          )}
         </View>
 
         <View style={styles.summaryRow}>
           <Text style={styles.summaryLabel}>Type</Text>
-          <Text style={styles.summaryValue}>{displayInstance.type}</Text>
+          <Text style={styles.summaryValue}>
+            {displayType || "Unavailable"}
+          </Text>
         </View>
         <View style={styles.summaryRow}>
-          <Text style={styles.summaryLabel}>Source</Text>
+          <Text style={styles.summaryLabel}>Zone</Text>
           <Text style={styles.summaryValue}>
-            {isUsingMockData ? "Mock fallback" : "Live monitoring"}
+            {displayZone || "Unavailable"}
+          </Text>
+        </View>
+        <View style={styles.summaryRowLast}>
+          <Text style={styles.summaryLabel}>Updated</Text>
+          <Text style={styles.summaryValue}>
+            {formatTimestamp(displayUpdatedAt)}
           </Text>
         </View>
       </View>
 
       <View style={styles.metricsCard}>
-        <View style={styles.sectionHeader}>
-          <View style={styles.sectionCopy}>
-            <Text style={styles.sectionTitle}>Metrics Snapshot</Text>
-            <Text style={styles.sectionSubtitle}>
-              CPU, memory, network, and disk activity for this instance.
-            </Text>
-          </View>
-          {isLoadingMetrics && monitoring && (
-            <Text style={styles.refreshingText}>Refreshing…</Text>
-          )}
+        <Text style={styles.sectionTitle}>Live Metrics</Text>
+        <View style={styles.metricGrid}>
+          <MetricTile label="CPU" value={formatPercent(latestCpuValue)} />
+          <MetricTile
+            label="Memory"
+            value={formatPercent(monitoring?.memoryPercent)}
+          />
+          <MetricTile
+            label="Network In"
+            value={formatBytes(monitoring?.networkInBytes)}
+          />
+          <MetricTile
+            label="Network Out"
+            value={formatBytes(monitoring?.networkOutBytes)}
+          />
+          <MetricTile
+            label="Disk Read Ops"
+            value={formatCompactNumber(monitoring?.diskReadOps)}
+          />
+          <MetricTile
+            label="Disk Write Ops"
+            value={formatCompactNumber(monitoring?.diskWriteOps)}
+          />
         </View>
         <InstanceMetricsGrid metrics={displayInstance.metrics} />
       </View>
 
       <View style={styles.chartCard}>
         <View style={styles.chartHeader}>
-          <View style={styles.sectionCopy}>
-            <Text style={styles.sectionTitle}>CPU Trend Preview</Text>
-            <Text style={styles.sectionSubtitle}>
-              Sample chart data until live history endpoints are added.
+          <View style={styles.chartHeaderText}>
+            <Text style={styles.chartTitle}>CPU Utilization</Text>
+            <Text style={styles.chartSubtitle}>
+              Selected range: {timeRange}
             </Text>
+            {localHistorySeries.length > 0 ? (
+              <Text style={styles.cacheText}>
+                Chart history is being loaded from saved on-device samples.
+              </Text>
+            ) : null}
+            {apiBaseUrl ? (
+              <Text style={styles.endpointText}>API: {apiBaseUrl}</Text>
+            ) : null}
+            {isLoadingMetrics ? (
+              <Text style={styles.loadingText}>Loading metrics…</Text>
+            ) : null}
+            {metricsError ? (
+              <Text style={styles.errorText}>{metricsError}</Text>
+            ) : null}
           </View>
 
           <View style={styles.chartStats}>
@@ -248,41 +534,7 @@ export default function InstanceDetailScreen() {
         </View>
 
         <TimeRangeSelector value={timeRange} onChange={setTimeRange} />
-        <CpuUsageChart data={mockCpuSeries} />
-      </View>
-
-      <View style={styles.chartCard}>
-        <Text style={styles.chartTitle}>Extended Metrics</Text>
-
-        <View style={styles.metricsGrid}>
-          <View style={styles.metricTile}>
-            <Text style={styles.metricTileLabel}>Disk Read Ops</Text>
-            <Text style={styles.metricTileValue}>
-              {monitoring?.diskReadOps ?? 0}
-            </Text>
-          </View>
-
-          <View style={styles.metricTile}>
-            <Text style={styles.metricTileLabel}>Disk Write Ops</Text>
-            <Text style={styles.metricTileValue}>
-              {monitoring?.diskWriteOps ?? 0}
-            </Text>
-          </View>
-
-          <View style={styles.metricTile}>
-            <Text style={styles.metricTileLabel}>Status Check Failed</Text>
-            <Text style={styles.metricTileValue}>
-              {monitoring?.statusCheckFailed ?? 0}
-            </Text>
-          </View>
-
-          <View style={styles.metricTile}>
-            <Text style={styles.metricTileLabel}>Public IP</Text>
-            <Text style={styles.metricTileValue}>
-              {monitoring?.publicIp ?? "Private"}
-            </Text>
-          </View>
-        </View>
+        <CpuUsageChart data={chartSeries} />
       </View>
     </ScrollView>
   );
@@ -330,6 +582,20 @@ const styles = StyleSheet.create({
     padding: 20,
     gap: 16,
   },
+  emptyScreen: {
+    flex: 1,
+    backgroundColor: "#F8FAFC",
+    justifyContent: "center",
+    padding: 24,
+    gap: 8,
+  },
+  headerBackButton: {
+    paddingVertical: 4,
+    paddingRight: 8,
+  },
+  headerBackButtonPressed: {
+    opacity: 0.7,
+  },
   header: {
     gap: 6,
   },
@@ -342,29 +608,10 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#64748B",
   },
-  loadingPanel: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 14,
-    backgroundColor: "#EFF6FF",
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: "#BFDBFE",
-    padding: 16,
-  },
-  loadingCopy: {
-    flex: 1,
-    gap: 4,
-  },
-  loadingTitle: {
+  sectionTitle: {
     fontSize: 16,
     fontWeight: "700",
-    color: "#1D4ED8",
-  },
-  loadingSubtitle: {
-    fontSize: 13,
-    lineHeight: 19,
-    color: "#1E40AF",
+    color: "#0F172A",
   },
   summaryCard: {
     backgroundColor: "#FFFFFF",
@@ -380,6 +627,12 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     gap: 12,
   },
+  summaryRowLast: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
   summaryLabel: {
     flex: 1,
     fontSize: 12,
@@ -392,6 +645,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#0F172A",
     fontWeight: "600",
+    flexShrink: 1,
     textAlign: "right",
   },
   statePill: {
@@ -410,7 +664,34 @@ const styles = StyleSheet.create({
     padding: 16,
     borderWidth: 1,
     borderColor: "#E2E8F0",
-    gap: 14,
+    gap: 12,
+  },
+  metricGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  metricTile: {
+    width: "47%",
+    backgroundColor: "#F8FAFC",
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    gap: 6,
+  },
+  metricLabel: {
+    fontSize: 11,
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+    color: "#64748B",
+  },
+  metricValue: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#0F172A",
   },
   chartCard: {
     backgroundColor: "#FFFFFF",
@@ -425,19 +706,33 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     gap: 12,
   },
-  sectionCopy: {
+  chartHeaderText: {
     flex: 1,
-    gap: 4,
   },
-  sectionTitle: {
-    fontSize: 17,
+  chartTitle: {
+    fontSize: 16,
     fontWeight: "700",
     color: "#0F172A",
   },
-  sectionSubtitle: {
-    fontSize: 13,
-    lineHeight: 19,
+  chartSubtitle: {
+    marginTop: 4,
+    fontSize: 12,
     color: "#64748B",
+  },
+  loadingText: {
+    marginTop: 6,
+    fontSize: 12,
+    color: "#94A3B8",
+  },
+  cacheText: {
+    marginTop: 6,
+    fontSize: 12,
+    color: "#0F766E",
+  },
+  endpointText: {
+    marginTop: 6,
+    fontSize: 12,
+    color: "#475569",
   },
   refreshingText: {
     fontSize: 12,

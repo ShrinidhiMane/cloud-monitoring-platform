@@ -6,101 +6,85 @@ AWS.config.update({ region: "us-east-2" });
 
 const POWER_ACTIONS = new Set(["start", "stop"]);
 
-const createAwsClients = () => ({
-  ec2: new AWS.EC2()
-});
-const validateRule = (rule) => {
-  const ipRanges = (rule.IpRanges || []).map(ip => ip.CidrIp);
-
-  return {
-    protocol: rule.IpProtocol || "unknown",
-    fromPort: rule.FromPort ?? "all",
-    toPort: rule.ToPort ?? "all",
-    isValidPortRange:
-      rule.FromPort !== undefined &&
-      rule.ToPort !== undefined &&
-      rule.FromPort <= rule.ToPort,
-    ipRanges,
-    isPublic: ipRanges.includes("0.0.0.0/0"),
-    isSSHOpenToWorld:
-      rule.FromPort === 22 && ipRanges.includes("0.0.0.0/0"),
-    isAllTrafficOpen:
-      rule.IpProtocol === "-1" && ipRanges.includes("0.0.0.0/0")
-  };
+const DEFAULT_RANGE = "1h";
+const RANGE_CONFIG = {
+  "15m": {
+    lookbackMs: 15 * 60 * 1000,
+    period: 60,
+  },
+  "1h": {
+    lookbackMs: 60 * 60 * 1000,
+    period: 60,
+  },
+  "6h": {
+    lookbackMs: 6 * 60 * 60 * 1000,
+    period: 300,
+  },
+  "24h": {
+    lookbackMs: 24 * 60 * 60 * 1000,
+    period: 900,
+  },
 };
 
-const classifyRisk = (rules) => {
-  let hasPublic = false;
+function getRangeConfig(range) {
+  if (typeof range !== "string") {
+    return RANGE_CONFIG[DEFAULT_RANGE];
+  }
 
-  for (const rule of rules) {
-    if (rule.isSSHOpenToWorld || rule.isAllTrafficOpen) {
-      return "HIGH";
-    }
+  return RANGE_CONFIG[range] ?? RANGE_CONFIG[DEFAULT_RANGE];
+}
+
+function roundMetricValue(value) {
+  return Number((value ?? 0).toFixed(2));
+}
+
+function sortDatapoints(datapoints = []) {
+  return [...datapoints].sort((left, right) => {
+    return (
+      new Date(left.Timestamp).getTime() - new Date(right.Timestamp).getTime()
+    );
+  });
+}
+
+function getLastMetricValue(datapoints, metricKey) {
+  const latestPoint = sortDatapoints(datapoints).at(-1);
+  return roundMetricValue(latestPoint?.[metricKey]);
+}
+
+function toIsoTimestamp(timestamp) {
+  return timestamp instanceof Date
+    ? timestamp.toISOString()
+    : new Date(timestamp).toISOString();
+}
+
+function buildCpuSeries(datapoints = []) {
+  return sortDatapoints(datapoints).map((point) => ({
+    timestamp: toIsoTimestamp(point.Timestamp),
+    value: roundMetricValue(point.Average),
+  }));
+}
+
+function getInstanceName(instance) {
+  return (
+    instance.Tags?.find((tag) => tag.Key === "Name")?.Value ??
+    instance.InstanceId
+  );
+}
+
+app.get("/monitoring", async (req, res, next) => {
+  try {
+    const result = [];
+    const responseTimestamp = new Date().toISOString();
+    const { lookbackMs, period } = getRangeConfig(req.query.range);
 
     if (rule.isPublic) {
       hasPublic = true;
     }
   }
 
-  if (hasPublic) return "MEDIUM";
-
-  return "LOW";
-};
-
-export const createApp = (clients = createAwsClients()) => {
-  const { ec2 } = clients;
-  const app = express();
-
-  app.use(cors());
-  app.use(express.json());
-
-  app.get("/", (req, res) => {
-    console.log("ROOT HIT");
-    res.send("Server working properly");
-  });
-
-  app.get("/monitoring", async (req, res, next) => {
-    try {
-      console.log("Monitoring HIT");
-
-      let securityGroupsData = [];
-
-      try {
-        const sgData = await ec2.describeSecurityGroups().promise();
-
-        securityGroupsData = sgData.SecurityGroups.map(sg => {
-          const inbound = (sg.IpPermissions || []).map(rule => validateRule(rule));
-          const outbound = (sg.IpPermissionsEgress || []).map(rule => validateRule(rule));
-
-          const riskLevel = classifyRisk([...inbound, ...outbound]);
-
-          return {
-            groupId: sg.GroupId,
-            groupName: sg.GroupName,
-            description: sg.Description,
-            inboundRules: inbound,
-            outboundRules: outbound,
-
-            riskLevel
-          };
-        });
-
-      } catch (err) {
-        console.error("Security Groups Error:", err.message);
-
-        securityGroupsData = [
-          {
-            groupId: "sg-mock",
-            groupName: "mock-group",
-            inboundRules: [],
-            outboundRules: [],
-            riskLevel: "LOW"
-          }
-        ];
-      }
-
-      res.status(200).json({
-        timestamp: new Date().toISOString(),
+    if (!ec2Data.Reservations.length) {
+      return res.status(200).json({
+        timestamp: responseTimestamp,
         region: AWS.config.region,
         securityGroups: securityGroupsData
       });
@@ -121,26 +105,131 @@ export const createApp = (clients = createAwsClients()) => {
         });
       }
 
-      if (!POWER_ACTIONS.has(action)) {
-        return res.status(400).json({
-          error: "ValidationError",
-          message: "Body field 'action' must be either 'start' or 'stop'"
+    for (const reservation of ec2Data.Reservations) {
+      for (const instance of reservation.Instances) {
+        const instanceId = instance.InstanceId;
+        const state = instance.State.Name;
+        const type = instance.InstanceType;
+        const name = getInstanceName(instance);
+        const zone = instance.Placement?.AvailabilityZone;
+
+        const endTime = new Date();
+        const startTime = new Date(endTime.getTime() - lookbackMs);
+
+        const [
+          cpuData,
+          netInData,
+          netOutData,
+          diskReadData,
+          diskWriteData,
+          memoryData,
+        ] = await Promise.all([
+          cloudwatch
+            .getMetricStatistics({
+              Namespace: "AWS/EC2",
+              MetricName: "CPUUtilization",
+              Dimensions: [{ Name: "InstanceId", Value: instanceId }],
+              StartTime: startTime,
+              EndTime: endTime,
+              Period: period,
+              Statistics: ["Average"],
+            })
+            .promise(),
+
+          cloudwatch
+            .getMetricStatistics({
+              Namespace: "AWS/EC2",
+              MetricName: "NetworkIn",
+              Dimensions: [{ Name: "InstanceId", Value: instanceId }],
+              StartTime: startTime,
+              EndTime: endTime,
+              Period: period,
+              Statistics: ["Sum"],
+            })
+            .promise(),
+
+          cloudwatch
+            .getMetricStatistics({
+              Namespace: "AWS/EC2",
+              MetricName: "NetworkOut",
+              Dimensions: [{ Name: "InstanceId", Value: instanceId }],
+              StartTime: startTime,
+              EndTime: endTime,
+              Period: period,
+              Statistics: ["Sum"],
+            })
+            .promise(),
+
+          cloudwatch
+            .getMetricStatistics({
+              Namespace: "AWS/EC2",
+              MetricName: "DiskReadOps",
+              Dimensions: [{ Name: "InstanceId", Value: instanceId }],
+              StartTime: startTime,
+              EndTime: endTime,
+              Period: period,
+              Statistics: ["Sum"],
+            })
+            .promise(),
+
+          cloudwatch
+            .getMetricStatistics({
+              Namespace: "AWS/EC2",
+              MetricName: "DiskWriteOps",
+              Dimensions: [{ Name: "InstanceId", Value: instanceId }],
+              StartTime: startTime,
+              EndTime: endTime,
+              Period: period,
+              Statistics: ["Sum"],
+            })
+            .promise(),
+
+          cloudwatch
+            .getMetricStatistics({
+              Namespace: "CWAgent",
+              MetricName: "mem_used_percent",
+              Dimensions: [
+                { Name: "InstanceId", Value: instanceId },
+                { Name: "ImageId", Value: instance.ImageId },
+                { Name: "InstanceType", Value: instance.InstanceType },
+              ],
+              StartTime: startTime,
+              EndTime: endTime,
+              Period: period,
+              Statistics: ["Average"],
+            })
+            .promise(),
+        ]);
+
+        const cpuSeries = buildCpuSeries(cpuData.Datapoints);
+        const latestCpuPoint = cpuSeries.at(-1);
+
+        result.push({
+          id: instanceId,
+          name,
+          state,
+          type,
+          zone,
+          cpuPercent: getLastMetricValue(cpuData.Datapoints, "Average"),
+          memoryPercent: getLastMetricValue(memoryData.Datapoints, "Average"),
+          networkInBytes: getLastMetricValue(netInData.Datapoints, "Sum"),
+          networkOutBytes: getLastMetricValue(netOutData.Datapoints, "Sum"),
+          diskReadOps: getLastMetricValue(diskReadData.Datapoints, "Sum"),
+          diskWriteOps: getLastMetricValue(diskWriteData.Datapoints, "Sum"),
+          cpuSeries,
+          updatedAt: latestCpuPoint?.timestamp ?? responseTimestamp,
         });
       }
 
-      const request = { InstanceIds: [instanceId] };
-
-      if (action === "start") {
-        await ec2.startInstances(request).promise();
-      } else {
-        await ec2.stopInstances(request).promise();
-      }
-
-      return res.status(200).json({
-        instanceId,
-        action,
-        status: "accepted"
-      });
+    res.status(200).json({
+      timestamp: responseTimestamp,
+      region: AWS.config.region,
+      instances: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
 
     } catch (error) {
       return next(error);

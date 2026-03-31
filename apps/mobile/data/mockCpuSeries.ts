@@ -1,4 +1,4 @@
-import type { CpuUsagePoint } from "@/types/metrics";
+import type { CpuUsagePoint } from "api-client";
 
 export const mockCpuSeries: CpuUsagePoint[] = [
   { label: "09:00", value: 18 },

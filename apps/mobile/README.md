@@ -10,18 +10,24 @@ This is the mobile app for the Cloud Infrastructure Monitoring project. It uses 
    npm install
    ```
 
-2. Start Metro
+2. Start Expo
 
    ```bash
    npx expo start
    ```
 
-3. Open the iOS Simulator
-
-   Press `i` in the Expo terminal, or run:
+3. Open iOS from Expo
 
    ```bash
    npx expo start --ios
+   ```
+
+   Or start Expo once and press `i` in the terminal.
+
+4. If you need tunnel mode for a physical device, use:
+
+   ```bash
+   npx expo start --tunnel
    ```
 
 ## Current Screen
@@ -57,7 +63,10 @@ Replace `mockInstances` with real data once the OpenAPI client is ready, and con
 
 ## Troubleshooting
 
-- If you see a white screen, stop Metro and restart from `apps/mobile` with `npx expo start -c`.
+- If Expo is not loading correctly, stop Metro and restart from `apps/mobile` with `npx expo start -c`.
+- Use `npx expo start --ios` for simulator launches and `npx expo start --tunnel` for physical devices.
+- If you specifically need the custom native iOS build, use `npx expo run:ios` or `npm run ios:native`.
+- If the monitoring API is only available over plain `http://...`, Expo Go on iOS may still block it. In that case use the native build path instead of Expo Go.
 - Make sure Metro is running from this folder: `.../SER517-Team5/apps/mobile`.
 
 ## Learn More

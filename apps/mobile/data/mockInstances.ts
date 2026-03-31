@@ -1,4 +1,4 @@
-import type { MonitoringInstance } from "@/services/apiClient";
+import type { InstanceSummary } from "api-client";
 
 export const mockInstances: MonitoringInstance[] = [
   {

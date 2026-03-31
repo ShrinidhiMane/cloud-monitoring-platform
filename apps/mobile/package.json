@@ -4,11 +4,15 @@
   "version": "1.0.0",
   "scripts": {
     "start": "expo start",
+    "start:lan": "expo start --lan",
+    "start:tunnel": "expo start --tunnel",
     "android": "expo start --android",
     "ios": "expo start --ios",
+    "android:native": "expo run:android --no-bundler",
+    "ios:native": "expo run:ios --no-bundler",
     "web": "expo start --web",
     "lint": "expo lint --max-warnings=0",
-    "lint:fix":"expo lint --fix"
+    "lint:fix": "expo lint --fix"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",

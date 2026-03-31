@@ -14,26 +14,18 @@ export interface InstanceSummary {
   name: string;
   state: InstanceState;
   type: string;
-  availabilityZone?: string | null;
-  publicIp?: string | null;
+  zone?: string;
 }
 
-export interface MonitoringMetrics {
-  cpuUtilization: number;
-  memoryUtilization: number;
+export interface MonitoringInstance extends InstanceSummary {
+  cpuPercent: number;
+  memoryPercent: number;
   networkInBytes: number;
   networkOutBytes: number;
   diskReadOps: number;
   diskWriteOps: number;
-  statusCheckFailed: number;
-  cpuSeries: MetricSeriesPoint[];
-  memorySeries: MetricSeriesPoint[];
-  networkInSeries: MetricSeriesPoint[];
-  networkOutSeries: MetricSeriesPoint[];
-}
-
-export interface MonitoringInstance extends InstanceSummary {
-  metrics: MonitoringMetrics;
+  cpuSeries: import("./metrics").CpuUsagePoint[];
+  updatedAt: string;
 }
 
 export interface MonitoringResponse {
