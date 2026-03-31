@@ -9,6 +9,10 @@ const POWER_ACTIONS = new Set(["start", "stop"]);
 const createAwsClients = () => ({
   ec2: new AWS.EC2()
 });
+
+//////////////////////////////////////////////////////////////
+// RULE VALIDATION
+//////////////////////////////////////////////////////////////
 const validateRule = (rule) => {
   const ipRanges = (rule.IpRanges || []).map(ip => ip.CidrIp);
 
@@ -29,6 +33,30 @@ const validateRule = (rule) => {
   };
 };
 
+//////////////////////////////////////////////////////////////
+// ✅ NEW: RISK CLASSIFICATION
+//////////////////////////////////////////////////////////////
+const classifyRisk = (rules) => {
+  let hasPublic = false;
+
+  for (const rule of rules) {
+    if (rule.isSSHOpenToWorld || rule.isAllTrafficOpen) {
+      return "HIGH";
+    }
+
+    if (rule.isPublic) {
+      hasPublic = true;
+    }
+  }
+
+  if (hasPublic) return "MEDIUM";
+
+  return "LOW";
+};
+
+//////////////////////////////////////////////////////////////
+// APP
+//////////////////////////////////////////////////////////////
 export const createApp = (clients = createAwsClients()) => {
   const { ec2 } = clients;
   const app = express();
@@ -36,11 +64,17 @@ export const createApp = (clients = createAwsClients()) => {
   app.use(cors());
   app.use(express.json());
 
+  //////////////////////////////////////////////////////////////
+  // ROOT
+  //////////////////////////////////////////////////////////////
   app.get("/", (req, res) => {
     console.log("ROOT HIT");
     res.send("Server working properly");
   });
 
+  //////////////////////////////////////////////////////////////
+  // ✅ UPDATED MONITORING API (WITH RISK)
+  //////////////////////////////////////////////////////////////
   app.get("/monitoring", async (req, res, next) => {
     try {
       console.log("Monitoring HIT");
@@ -50,13 +84,23 @@ export const createApp = (clients = createAwsClients()) => {
       try {
         const sgData = await ec2.describeSecurityGroups().promise();
 
-        securityGroupsData = sgData.SecurityGroups.map(sg => ({
-          groupId: sg.GroupId,
-          groupName: sg.GroupName,
-          description: sg.Description,
-          inboundRules: (sg.IpPermissions || []).map(rule => validateRule(rule)),
-          outboundRules: (sg.IpPermissionsEgress || []).map(rule => validateRule(rule))
-        }));
+        securityGroupsData = sgData.SecurityGroups.map(sg => {
+          const inbound = (sg.IpPermissions || []).map(rule => validateRule(rule));
+          const outbound = (sg.IpPermissionsEgress || []).map(rule => validateRule(rule));
+
+          const riskLevel = classifyRisk([...inbound, ...outbound]);
+
+          return {
+            groupId: sg.GroupId,
+            groupName: sg.GroupName,
+            description: sg.Description,
+            inboundRules: inbound,
+            outboundRules: outbound,
+
+            // ✅ NEW FIELD
+            riskLevel
+          };
+        });
 
       } catch (err) {
         console.error("Security Groups Error:", err.message);
@@ -66,7 +110,8 @@ export const createApp = (clients = createAwsClients()) => {
             groupId: "sg-mock",
             groupName: "mock-group",
             inboundRules: [],
-            outboundRules: []
+            outboundRules: [],
+            riskLevel: "LOW"
           }
         ];
       }
@@ -81,6 +126,10 @@ export const createApp = (clients = createAwsClients()) => {
       next(error);
     }
   });
+
+  //////////////////////////////////////////////////////////////
+  // POWER API
+  //////////////////////////////////////////////////////////////
   app.post("/instances/:instanceId/power", async (req, res, next) => {
     try {
       const { instanceId } = req.params;
@@ -101,9 +150,12 @@ export const createApp = (clients = createAwsClients()) => {
       }
 
       const request = { InstanceIds: [instanceId] };
-      const response = action === "start"
-        ? await ec2.startInstances(request).promise()
-        : await ec2.stopInstances(request).promise();
+
+      if (action === "start") {
+        await ec2.startInstances(request).promise();
+      } else {
+        await ec2.stopInstances(request).promise();
+      }
 
       return res.status(200).json({
         instanceId,
@@ -115,9 +167,17 @@ export const createApp = (clients = createAwsClients()) => {
       return next(error);
     }
   });
+
+  //////////////////////////////////////////////////////////////
+  // 404
+  //////////////////////////////////////////////////////////////
   app.use((req, res) => {
     res.status(404).json({ error: "Route not found" });
   });
+
+  //////////////////////////////////////////////////////////////
+  // ERROR HANDLER
+  //////////////////////////////////////////////////////////////
   app.use((err, req, res, next) => {
     console.error("Backend Error:", err);
     res.status(500).json({
@@ -128,6 +188,10 @@ export const createApp = (clients = createAwsClients()) => {
 
   return app;
 };
+
+//////////////////////////////////////////////////////////////
+// SERVER START
+//////////////////////////////////////////////////////////////
 const PORT = 5000;
 
 if (process.env.NODE_ENV !== "test") {
