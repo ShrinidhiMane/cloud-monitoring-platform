@@ -123,8 +123,9 @@ export default function Instances() {
             <span className="live-pill muted">{statusText}</span>
           </div>
         </div>
+
         <div className="stat-grid">
-          {statCards.map((card) => (
+          {stats.map((card) => (
             <div key={card.label} className="stat-card">
               <div className="stat-label">{card.label}</div>
               <div className="stat-value">{card.value}</div>

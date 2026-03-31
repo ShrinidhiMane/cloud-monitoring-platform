@@ -1,0 +1,59 @@
+﻿{
+    "timestamp":  "2026-03-20T23:49:18.0484416Z",
+    "region":  "us-east-2",
+    "instances":  [
+                      {
+                          "instanceId":  "i-0f0e251f85548b8c8",
+                          "name":  "mysql-db-server",
+                          "state":  "running",
+                          "type":  "t3.micro",
+                          "publicIp":  "3.136.159.157",
+                          "subnetId":  "subnet-0d6a4d27e94f528c4",
+                          "vpcId":  "vpc-00b556bf1695f6f6e",
+                          "networkInterfaceIds":  [
+                                                      "eni-0da2144723fd769d4"
+                                                  ],
+                          "securityGroupIds":  [
+                                                   "sg-02717e44751a510fe"
+                                               ],
+                          "cpuPercent":  0.15,
+                          "networkInBytes":  6651,
+                          "networkOutBytes":  5523,
+                          "diskReadOps":  0,
+                          "diskWriteOps":  0,
+                          "memoryLatest":  null,
+                          "startTimeUtc":  "2026-03-20T22:48:51Z",
+                          "endTimeUtc":  "2026-03-20T23:48:51Z",
+                          "periodSeconds":  300
+                      },
+                      {
+                          "instanceId":  "i-0bb4e6b6787d754c4",
+                          "name":  "apache-web-server",
+                          "state":  "running",
+                          "type":  "t3.micro",
+                          "publicIp":  "3.134.116.3",
+                          "subnetId":  "subnet-0d6a4d27e94f528c4",
+                          "vpcId":  "vpc-00b556bf1695f6f6e",
+                          "networkInterfaceIds":  [
+                                                      "eni-00e72cff620ae64b9"
+                                                  ],
+                          "securityGroupIds":  [
+                                                   "sg-0c99c36ad3cb0097e"
+                                               ],
+                          "cpuPercent":  0.55,
+                          "networkInBytes":  36132,
+                          "networkOutBytes":  30858,
+                          "diskReadOps":  0,
+                          "diskWriteOps":  0,
+                          "memoryLatest":  34.06,
+                          "startTimeUtc":  "2026-03-20T22:48:51Z",
+                          "endTimeUtc":  "2026-03-20T23:48:51Z",
+                          "periodSeconds":  300
+                      }
+                  ],
+    "s3":  {
+               "bucketName":  "ser517-monitoring-bucket-team5",
+               "bucketSizeBytes":  0,
+               "numberOfObjects":  0
+           }
+}

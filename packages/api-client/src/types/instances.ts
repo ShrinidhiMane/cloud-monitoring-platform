@@ -1,10 +1,13 @@
+import type { MetricSeriesPoint } from "./metrics";
+
 export type InstanceState =
   | "pending"
   | "running"
   | "stopping"
   | "stopped"
   | "shutting-down"
-  | "terminated";
+  | "terminated"
+  | "unknown";
 
 export interface InstanceSummary {
   id: string;

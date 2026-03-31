@@ -188,7 +188,7 @@ export default function InstanceDetail() {
             </div>
             <p className="detail-caption">Latest CWAgent memory percentage.</p>
           </div>
-        </div>
+        ) : null}
       </section>
 
       <section className="panel">

@@ -1,0 +1,20 @@
+﻿{
+    "timestamp":  "2026-03-19T23:47:48.0327301Z",
+    "region":  "us-east-2",
+    "instances":  [
+                      {
+                          "id":  "i-0f0e251f85548b8c8",
+                          "subnetId":  "subnet-0d6a4d27e94f528c4",
+                          "vpcId":  "vpc-00b556bf1695f6f6e",
+                          "networkInterfaces":  "eni-0da2144723fd769d4",
+                          "securityGroups":  "sg-02717e44751a510fe"
+                      },
+                      {
+                          "id":  "i-0bb4e6b6787d754c4",
+                          "subnetId":  "subnet-0d6a4d27e94f528c4",
+                          "vpcId":  "vpc-00b556bf1695f6f6e",
+                          "networkInterfaces":  "eni-00e72cff620ae64b9",
+                          "securityGroups":  "sg-0c99c36ad3cb0097e"
+                      }
+                  ]
+}

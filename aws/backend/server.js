@@ -2,14 +2,9 @@ import express from "express";
 import cors from "cors";
 import AWS from "aws-sdk";
 
-const app = express();
-app.use(cors());
-app.use(express.json());
-
 AWS.config.update({ region: "us-east-2" });
 
-const ec2 = new AWS.EC2();
-const cloudwatch = new AWS.CloudWatch();
+const POWER_ACTIONS = new Set(["start", "stop"]);
 
 const DEFAULT_RANGE = "1h";
 const RANGE_CONFIG = {
@@ -82,19 +77,33 @@ app.get("/monitoring", async (req, res, next) => {
     const responseTimestamp = new Date().toISOString();
     const { lookbackMs, period } = getRangeConfig(req.query.range);
 
-    const ec2Data = await ec2
-      .describeInstances({
-        Filters: [{ Name: "instance-state-name", Values: ["running"] }],
-      })
-      .promise();
+    if (rule.isPublic) {
+      hasPublic = true;
+    }
+  }
 
     if (!ec2Data.Reservations.length) {
       return res.status(200).json({
         timestamp: responseTimestamp,
         region: AWS.config.region,
-        instances: [],
+        securityGroups: securityGroupsData
       });
+
+    } catch (error) {
+      next(error);
     }
+  });
+  app.post("/instances/:instanceId/power", async (req, res, next) => {
+    try {
+      const { instanceId } = req.params;
+      const action = req.body?.action;
+
+      if (!instanceId) {
+        return res.status(400).json({
+          error: "ValidationError",
+          message: "Path parameter 'instanceId' is required"
+        });
+      }
 
     for (const reservation of ec2Data.Reservations) {
       for (const instance of reservation.Instances) {
@@ -211,7 +220,6 @@ app.get("/monitoring", async (req, res, next) => {
           updatedAt: latestCpuPoint?.timestamp ?? responseTimestamp,
         });
       }
-    }
 
     res.status(200).json({
       timestamp: responseTimestamp,
@@ -223,22 +231,31 @@ app.get("/monitoring", async (req, res, next) => {
   }
 });
 
-app.use((req, res) => {
-  res.status(404).json({
-    error: "Route not found",
+    } catch (error) {
+      return next(error);
+    }
   });
-});
 
-app.use((err, req, res) => {
-  res.status(500).json({
-    error: "Internal Server Error",
-    message: err.message,
+  app.use((req, res) => {
+    res.status(404).json({ error: "Route was not found" });
   });
-});
 
-const PORT = 4000;
+  app.use((err, req, res, next) => {
+    console.error("Backend Error:", err);
+    res.status(500).json({
+      error: "Internal Server Error",
+      message: err.message
+    });
+  });
 
-app.listen(PORT, () => {
-  /* eslint-disable-next-line no-undef, no-console */
-  console.log(`Server running on http://localhost:${PORT}`);
-});
+  return app;
+};
+
+const PORT = 5000;
+
+if (process.env.NODE_ENV !== "test") {
+  const app = createApp();
+  app.listen(PORT, "127.0.0.1", () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+  });
+}

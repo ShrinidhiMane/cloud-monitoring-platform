@@ -22,13 +22,13 @@ export async function apiFetch<T>(
       ...(init.headers || {}),
     },
   });
+
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`HTTP ${res.status}: ${text || res.statusText}`);
   }
-  return (await res.json()) as T;
 
-  // console.log(`Received response: ${res.status} ${res.statusText}`);
+  return (await res.json()) as T;
 }
 
 function buildMonitoringUrl(range?: string): string {

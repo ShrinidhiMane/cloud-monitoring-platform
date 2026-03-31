@@ -9,6 +9,8 @@ import { cacheMonitoringHistory } from "@/services/metricsHistory";
 import type { MonitoringResponse, MonitoringInstance } from "api-client";
 import { fetchMonitoringOverview } from "api-client";
 import { mockInstances } from "@/data/mockInstances";
+import { fetchMonitoring, type MonitoringInstance } from "@/services/apiClient";
+import { getActiveAwsSetup } from "@/services/awsSetupStorage";
 
 function ItemSeparator() {
   return <View style={styles.separator} />;
@@ -124,19 +126,36 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#F8FAFC",
   },
-  header: {
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 12,
+  centered: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 32,
+    gap: 10,
   },
-  title: {
-    fontSize: 24,
+  loadingTitle: {
+    marginTop: 8,
+    fontSize: 18,
     fontWeight: "700",
     color: "#0F172A",
   },
+  loadingSubtitle: {
+    fontSize: 13,
+    lineHeight: 20,
+    textAlign: "center",
+    color: "#64748B",
+  },
+  header: {
+    paddingBottom: 16,
+    gap: 10,
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: "800",
+    color: "#0F172A",
+  },
   subtitle: {
-    marginTop: 6,
     fontSize: 14,
+    lineHeight: 20,
     color: "#475569",
   },
   statusCard: {
@@ -168,10 +187,28 @@ const styles = StyleSheet.create({
     borderRadius: 16,
   },
   cardPressed: {
-    opacity: 0.9,
+    opacity: 0.94,
     transform: [{ scale: 0.99 }],
   },
   separator: {
-    height: 12,
+    height: 14,
+  },
+  emptyState: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    padding: 20,
+    gap: 8,
+  },
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#0F172A",
+  },
+  emptySubtitle: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: "#64748B",
   },
 });

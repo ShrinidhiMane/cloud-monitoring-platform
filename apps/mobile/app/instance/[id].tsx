@@ -5,6 +5,8 @@ import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 
 import { CpuUsageChart } from "@/components/CpuUsageChart";
+import { InstanceMetricsGrid } from "@/components/InstanceMetricsGrid";
+import { StatusBanner } from "@/components/StatusBanner";
 import {
   TimeRangeSelector,
   type TimeRangeOption,
@@ -17,6 +19,7 @@ import {
 import {
   type CpuUsagePoint,
   fetchInstanceMonitoring,
+  type InstanceState,
   type MonitoringInstance,
   type InstanceState,
 } from "api-client";
@@ -37,6 +40,16 @@ const STATE_COLORS: Record<InstanceState, { bg: string; text: string }> = {
   stopped: { bg: "#E5E7EB", text: "#374151" },
   "shutting-down": { bg: "#FFE4E6", text: "#9F1239" },
   terminated: { bg: "#F3F4F6", text: "#6B7280" },
+  unknown: { bg: "#E0F2FE", text: "#075985" },
+};
+
+const EMPTY_METRICS: MonitoringMetrics = {
+  cpuUtilization: 0,
+  memoryUtilization: 0,
+  networkInBytes: 0,
+  networkOutBytes: 0,
+  diskReadOps: 0,
+  diskWriteOps: 0,
 };
 const POLL_INTERVAL_MS = 30_000;
 const MAX_CHART_POINTS = 24;
@@ -151,6 +164,15 @@ function formatTimestamp(timestamp?: string): string {
     timeStyle: "short",
   }).format(parsedTimestamp);
 }
+
+const VALID_STATES: InstanceState[] = [
+  "pending",
+  "running",
+  "stopping",
+  "stopped",
+  "shutting-down",
+  "terminated",
+];
 
 export default function InstanceDetailScreen() {
   const router = useRouter();
@@ -299,7 +321,7 @@ export default function InstanceDetailScreen() {
           setIsLoadingMetrics(false);
         }
       }
-    };
+    }
 
     void loadCachedHistory();
     void loadMetrics();
@@ -387,6 +409,22 @@ export default function InstanceDetailScreen() {
         <Text style={styles.subtitle}>{displayId}</Text>
       </View>
 
+      {isLoadingMetrics && !monitoring && (
+        <View style={styles.loadingPanel}>
+          <ActivityIndicator size="large" color="#2563EB" />
+          <View style={styles.loadingCopy}>
+            <Text style={styles.loadingTitle}>Loading live monitoring</Text>
+            <Text style={styles.loadingSubtitle}>
+              Trying the real AWS metrics service before showing fallback data.
+            </Text>
+          </View>
+        </View>
+      )}
+
+      {isUsingMockData && mockReason && (
+        <StatusBanner title="Mock data" message={mockReason} />
+      )}
+
       <View style={styles.summaryCard}>
         <View style={styles.summaryRow}>
           <Text style={styles.summaryLabel}>State</Text>
@@ -411,6 +449,7 @@ export default function InstanceDetailScreen() {
             <Text style={styles.summaryValue}>Unavailable</Text>
           )}
         </View>
+
         <View style={styles.summaryRow}>
           <Text style={styles.summaryLabel}>Type</Text>
           <Text style={styles.summaryValue}>
@@ -456,6 +495,7 @@ export default function InstanceDetailScreen() {
             value={formatCompactNumber(monitoring?.diskWriteOps)}
           />
         </View>
+        <InstanceMetricsGrid metrics={displayInstance.metrics} />
       </View>
 
       <View style={styles.chartCard}>
@@ -480,22 +520,57 @@ export default function InstanceDetailScreen() {
               <Text style={styles.errorText}>{metricsError}</Text>
             ) : null}
           </View>
+
           <View style={styles.chartStats}>
             <View style={styles.statBlock}>
               <Text style={styles.statLabel}>Avg</Text>
-              <Text style={styles.statValue}>{average}%</Text>
+              <Text style={styles.statValue}>{averageCpu}%</Text>
             </View>
             <View style={styles.statBlock}>
               <Text style={styles.statLabel}>Peak</Text>
-              <Text style={styles.statValue}>{peak}%</Text>
+              <Text style={styles.statValue}>{peakCpu}%</Text>
             </View>
           </View>
         </View>
+
         <TimeRangeSelector value={timeRange} onChange={setTimeRange} />
         <CpuUsageChart data={chartSeries} />
       </View>
     </ScrollView>
   );
+}
+
+function getParamValue(value?: string | string[]): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function buildFallbackInstance({
+  id,
+  name,
+  state,
+  type,
+}: {
+  id?: string;
+  name?: string;
+  state?: string;
+  type?: string;
+}): MonitoringInstance {
+  const matchingMock = mockInstances.find((instance) => instance.id === id);
+  if (matchingMock) {
+    return matchingMock;
+  }
+
+  const fallbackState = VALID_STATES.includes(state as InstanceState)
+    ? (state as InstanceState)
+    : "running";
+
+  return {
+    id: id ?? "unknown-instance",
+    name: name?.trim() || id || "Unknown instance",
+    state: fallbackState,
+    type: type ?? "unknown",
+    metrics: EMPTY_METRICS,
+  };
 }
 
 const styles = StyleSheet.create({
@@ -525,8 +600,8 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   title: {
-    fontSize: 24,
-    fontWeight: "700",
+    fontSize: 28,
+    fontWeight: "800",
     color: "#0F172A",
   },
   subtitle: {
@@ -559,12 +634,14 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   summaryLabel: {
+    flex: 1,
     fontSize: 12,
     color: "#64748B",
     textTransform: "uppercase",
     letterSpacing: 0.6,
   },
   summaryValue: {
+    flex: 1,
     fontSize: 14,
     color: "#0F172A",
     fontWeight: "600",
@@ -624,7 +701,7 @@ const styles = StyleSheet.create({
     borderColor: "#E2E8F0",
     gap: 12,
   },
-  chartHeader: {
+  sectionHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     gap: 12,
@@ -657,10 +734,15 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: "#475569",
   },
-  errorText: {
-    marginTop: 6,
+  refreshingText: {
     fontSize: 12,
-    color: "#DC2626",
+    fontWeight: "600",
+    color: "#2563EB",
+  },
+  chartHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 12,
   },
   chartStats: {
     flexDirection: "row",
@@ -675,6 +757,30 @@ const styles = StyleSheet.create({
     color: "#94A3B8",
   },
   statValue: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#0F172A",
+  },
+  metricsGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 12,
+  },
+  metricTile: {
+    width: "47%",
+    backgroundColor: "#F8FAFC",
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  metricTileLabel: {
+    fontSize: 11,
+    textTransform: "uppercase",
+    color: "#64748B",
+    marginBottom: 6,
+  },
+  metricTileValue: {
     fontSize: 14,
     fontWeight: "600",
     color: "#0F172A",
