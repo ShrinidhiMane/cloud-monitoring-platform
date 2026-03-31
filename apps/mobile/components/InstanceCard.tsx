@@ -1,6 +1,8 @@
 import React from "react";
 import { StyleSheet, Text, View } from "react-native";
-import type { InstanceState, InstanceSummary } from "api-client";
+import type { InstanceState, MonitoringInstance } from "api-client";
+
+import { InstanceMetricsGrid } from "@/components/InstanceMetricsGrid";
 
 const STATE_COLORS: Record<InstanceState, { bg: string; text: string }> = {
   pending: { bg: "#FEF3C7", text: "#92400E" },
@@ -9,6 +11,7 @@ const STATE_COLORS: Record<InstanceState, { bg: string; text: string }> = {
   stopped: { bg: "#E5E7EB", text: "#374151" },
   "shutting-down": { bg: "#FFE4E6", text: "#9F1239" },
   terminated: { bg: "#F3F4F6", text: "#6B7280" },
+  unknown: { bg: "#E0F2FE", text: "#075985" },
 };
 
 interface InstanceCardProps {
@@ -17,6 +20,14 @@ interface InstanceCardProps {
 
 export function InstanceCard({ instance }: InstanceCardProps) {
   const stateStyle = STATE_COLORS[instance.state];
+  const snapshot = {
+    cpuUtilization: instance.cpuPercent,
+    memoryUtilization: instance.memoryPercent,
+    networkInBytes: instance.networkInBytes,
+    networkOutBytes: instance.networkOutBytes,
+    diskReadOps: instance.diskReadOps,
+    diskWriteOps: instance.diskWriteOps,
+  };
 
   return (
     <View style={styles.card}>
@@ -43,7 +54,7 @@ export function InstanceCard({ instance }: InstanceCardProps) {
 
       <View style={styles.metricsSection}>
         <Text style={styles.metricsTitle}>Live Snapshot</Text>
-        <InstanceMetricsGrid metrics={instance.metrics} compact />
+        <InstanceMetricsGrid metrics={snapshot} compact />
       </View>
     </View>
   );

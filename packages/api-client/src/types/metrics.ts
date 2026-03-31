@@ -3,5 +3,3 @@ export interface CpuUsagePoint {
   label: string;
   value: number;
 }
-
-export type CpuUsagePoint = MetricSeriesPoint;

@@ -1,5 +1,3 @@
-import type { MetricSeriesPoint } from "./metrics";
-
 export type InstanceState =
   | "pending"
   | "running"
