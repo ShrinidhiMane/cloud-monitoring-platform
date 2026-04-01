@@ -1,4 +1,4 @@
-import { Stack, useRouter } from "expo-router";
+import { Stack, useRouter, type Href } from "expo-router";
 import { StyleSheet, View, Animated } from "react-native";
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import { ThemedText } from "@/components/themed-text";
@@ -6,6 +6,7 @@ import { ThemedView } from "@/components/themed-view";
 import { useEffect, useRef } from "react";
 
 const AnimatedThemedView = Animated.createAnimatedComponent(ThemedView);
+const TABS_ROUTE = "/tabs" as Href;
 
 export default function App() {
   const router = useRouter();
@@ -18,7 +19,7 @@ export default function App() {
       useNativeDriver: false,
     }).start(({ finished }) => {
       if (finished) {
-        router.replace("/tabs");
+        router.replace(TABS_ROUTE);
       }
     });
   }, [translateAnim, router]);
