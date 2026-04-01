@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import { Stack, useLocalSearchParams, useRouter, type Href } from "expo-router";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 
 import { CpuUsageChart } from "@/components/CpuUsageChart";
 import { ScreenStateCard } from "@/components/ScreenStateCard";
+import { SETTINGS_ROUTE, TABS_ROOT_ROUTE } from "@/navigation/routes";
 import {
   TimeRangeSelector,
   type TimeRangeOption,
@@ -57,8 +58,6 @@ const DETAIL_TIMESTAMP_FORMATTER = new Intl.DateTimeFormat("en-US", {
   dateStyle: "medium",
   timeStyle: "short",
 });
-const SETTINGS_ROUTE = "/tabs/settings" as Href;
-const TABS_ROUTE = "/tabs" as Href;
 
 interface MetricTileProps {
   label: string;
@@ -344,7 +343,7 @@ export default function InstanceDetailScreen() {
                 accessibilityRole="button"
                 hitSlop={10}
                 onPress={() => {
-                  router.replace(TABS_ROUTE);
+                  router.replace(TABS_ROOT_ROUTE);
                 }}
                 style={({ pressed }) => [
                   styles.headerBackButton,
@@ -384,7 +383,7 @@ export default function InstanceDetailScreen() {
                   return;
                 }
 
-                router.replace(TABS_ROUTE);
+                router.replace(TABS_ROOT_ROUTE);
               }}
               style={({ pressed }) => [
                 styles.headerBackButton,

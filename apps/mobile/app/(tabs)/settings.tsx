@@ -1,5 +1,6 @@
 import { useFocusEffect } from "@react-navigation/native";
 import React, { useCallback, useState } from "react";
+import { useRouter } from "expo-router";
 import {
   Pressable,
   SafeAreaView,
@@ -17,8 +18,10 @@ import {
   saveApiBaseUrl,
   testApiBaseUrl,
 } from "@/services/apiBaseUrl";
+import { AWS_SETUPS_ROUTE } from "@/navigation/routes";
 
 export default function SettingsScreen() {
+  const router = useRouter();
   const [apiBaseUrl, setApiBaseUrl] = useState("");
   const [savedBaseUrl, setSavedBaseUrl] = useState("");
   const [statusMessage, setStatusMessage] = useState(
@@ -100,6 +103,26 @@ export default function SettingsScreen() {
           <Text style={styles.helpText}>
             Current: {savedBaseUrl || "not set"}
           </Text>
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.label}>Navigation</Text>
+          <Text style={styles.helpText}>
+            Open the saved AWS setup manager from here instead of keeping it as
+            a hidden tab.
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => {
+              router.push(AWS_SETUPS_ROUTE);
+            }}
+            style={({ pressed }) => [
+              styles.button,
+              pressed && styles.buttonPressed,
+            ]}
+          >
+            <Text style={styles.buttonLabel}>Manage AWS Setups</Text>
+          </Pressable>
         </View>
 
         <View style={styles.actions}>
