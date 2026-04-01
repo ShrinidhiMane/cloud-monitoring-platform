@@ -1,10 +1,11 @@
 import { useFocusEffect } from "@react-navigation/native";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
-import { useRouter, type Href } from "expo-router";
+import { useRouter } from "expo-router";
 
 import { InstanceCard } from "@/components/InstanceCard";
 import { ScreenStateCard } from "@/components/ScreenStateCard";
+import { buildInstanceDetailRoute, SETTINGS_ROUTE } from "@/navigation/routes";
 import { hydrateApiBaseUrl } from "@/services/apiBaseUrl";
 import { warmMonitoringHistory } from "@/services/metricsHistory";
 import type { MonitoringResponse, MonitoringInstance } from "api-client";
@@ -13,8 +14,6 @@ import { fetchMonitoringOverview } from "api-client";
 function ItemSeparator() {
   return <View style={styles.separator} />;
 }
-
-const SETTINGS_ROUTE = "/tabs/settings" as Href;
 
 export default function InstancesScreen() {
   const router = useRouter();
@@ -102,16 +101,15 @@ export default function InstancesScreen() {
     <Pressable
       accessibilityRole="button"
       onPress={() =>
-        router.push({
-          pathname: "/instance/[id]",
-          params: {
+        router.push(
+          buildInstanceDetailRoute({
             id: item.id,
             name: item.name,
             state: item.state,
             type: item.type,
-            zone: item.zone ?? "",
-          },
-        })
+            zone: item.zone,
+          }),
+        )
       }
       style={({ pressed }) => [
         styles.cardWrapper,
