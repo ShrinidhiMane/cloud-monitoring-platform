@@ -5,6 +5,7 @@ import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 
 import { CpuUsageChart } from "@/components/CpuUsageChart";
+import { useAutoRefresh, type RefreshReason } from "@/hooks/use-auto-refresh";
 import { ScreenStateCard } from "@/components/ScreenStateCard";
 import { SETTINGS_ROUTE, TABS_ROOT_ROUTE } from "@/navigation/routes";
 import {
@@ -57,6 +58,11 @@ const COMPACT_NUMBER_FORMATTER = new Intl.NumberFormat("en-US", {
 const DETAIL_TIMESTAMP_FORMATTER = new Intl.DateTimeFormat("en-US", {
   dateStyle: "medium",
   timeStyle: "short",
+});
+const REFRESH_TIMESTAMP_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  hour: "numeric",
+  minute: "2-digit",
+  second: "2-digit",
 });
 
 interface MetricTileProps {
@@ -137,6 +143,19 @@ function formatTimestamp(timestamp?: string): string {
   return DETAIL_TIMESTAMP_FORMATTER.format(parsedTimestamp);
 }
 
+function formatRefreshTimestamp(timestamp?: string | null): string {
+  if (!timestamp) {
+    return "Waiting for the first successful refresh";
+  }
+
+  const parsedTimestamp = new Date(timestamp);
+  if (Number.isNaN(parsedTimestamp.getTime())) {
+    return "Waiting for the first successful refresh";
+  }
+
+  return REFRESH_TIMESTAMP_FORMATTER.format(parsedTimestamp);
+}
+
 export default function InstanceDetailScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{
@@ -159,7 +178,7 @@ export default function InstanceDetailScreen() {
   const [historySnapshot, setHistorySnapshot] =
     useState<CachedCpuHistorySnapshot>(EMPTY_HISTORY_SNAPSHOT);
   const [apiBaseUrl, setCurrentApiBaseUrl] = useState("");
-  const [refreshKey, setRefreshKey] = useState(0);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null);
   const remoteRange = timeRange === "7d" ? "24h" : timeRange;
 
   const displayName =
@@ -176,19 +195,82 @@ export default function InstanceDetailScreen() {
   const hasChartData = historySnapshot.chartSeries.length > 0;
   const hasLiveMetrics = monitoring !== null;
 
-  const retryMetricsLoad = useCallback(() => {
-    setRefreshKey((currentValue) => currentValue + 1);
-  }, []);
-
   const openSettings = useCallback(() => {
     router.push(SETTINGS_ROUTE);
   }, [router]);
+
+  const loadMetrics = useCallback(
+    async (_reason: RefreshReason) => {
+      if (!instanceId) {
+        setMetricsError("This route is missing an instance id.");
+        setMonitoring(null);
+        setHistorySnapshot(EMPTY_HISTORY_SNAPSHOT);
+        setLastRefreshedAt(null);
+        setIsLoadingMetrics(false);
+        return;
+      }
+
+      setIsLoadingMetrics(true);
+      setMetricsError(null);
+      let activeApiBaseUrl = "";
+
+      try {
+        activeApiBaseUrl = await hydrateApiBaseUrl();
+        setCurrentApiBaseUrl(activeApiBaseUrl);
+        const result = await fetchInstanceMonitoring(instanceId, remoteRange);
+        setLastRefreshedAt(new Date().toISOString());
+
+        if (!result) {
+          const cachedSnapshot = await readCachedCpuHistorySnapshot(
+            instanceId,
+            timeRange,
+            MAX_CHART_POINTS,
+          );
+
+          setMonitoring(null);
+          setHistorySnapshot(cachedSnapshot);
+          setMetricsError(
+            cachedSnapshot.sampleCount
+              ? `No live snapshot was returned for ${instanceId}. Showing saved history.`
+              : `No live snapshot was returned for ${instanceId}.`,
+          );
+          return;
+        }
+
+        const nextHistorySnapshot = await cacheMonitoringHistorySnapshot(
+          result,
+          timeRange,
+          MAX_CHART_POINTS,
+        );
+
+        setMonitoring(result);
+        setHistorySnapshot(nextHistorySnapshot);
+      } catch {
+        const cachedSnapshot = await readCachedCpuHistorySnapshot(
+          instanceId,
+          timeRange,
+          MAX_CHART_POINTS,
+        );
+
+        setHistorySnapshot(cachedSnapshot);
+        setMetricsError(
+          cachedSnapshot.sampleCount
+            ? `Could not refresh ${instanceId}. Showing saved history.`
+            : `CloudWatch unavailable at ${activeApiBaseUrl || "the configured endpoint"}.`,
+        );
+      } finally {
+        setIsLoadingMetrics(false);
+      }
+    },
+    [instanceId, remoteRange, timeRange],
+  );
 
   useEffect(() => {
     if (!instanceId) {
       setMetricsError("This route is missing an instance id.");
       setMonitoring(null);
       setHistorySnapshot(EMPTY_HISTORY_SNAPSHOT);
+      setLastRefreshedAt(null);
       setIsLoadingMetrics(false);
       return;
     }
@@ -208,89 +290,23 @@ export default function InstanceDetailScreen() {
       setHistorySnapshot(cachedSnapshot);
     };
 
-    const loadMetrics = async () => {
-      setIsLoadingMetrics(true);
-      setMetricsError(null);
-      let activeApiBaseUrl = "";
-
-      try {
-        activeApiBaseUrl = await hydrateApiBaseUrl();
-        if (!isMounted) {
-          return;
-        }
-
-        setCurrentApiBaseUrl(activeApiBaseUrl);
-        const result = await fetchInstanceMonitoring(instanceId, remoteRange);
-        if (!isMounted) {
-          return;
-        }
-
-        if (!result) {
-          const cachedSnapshot = await readCachedCpuHistorySnapshot(
-            instanceId,
-            timeRange,
-            MAX_CHART_POINTS,
-          );
-          if (!isMounted) {
-            return;
-          }
-
-          setMonitoring(null);
-          setHistorySnapshot(cachedSnapshot);
-          setMetricsError(
-            cachedSnapshot.sampleCount
-              ? `No live snapshot was returned for ${instanceId}. Showing saved history.`
-              : `No live snapshot was returned for ${instanceId}.`,
-          );
-          return;
-        }
-
-        const nextHistorySnapshot = await cacheMonitoringHistorySnapshot(
-          result,
-          timeRange,
-          MAX_CHART_POINTS,
-        );
-        if (!isMounted) {
-          return;
-        }
-
-        setMonitoring(result);
-        setHistorySnapshot(nextHistorySnapshot);
-      } catch {
-        const cachedSnapshot = await readCachedCpuHistorySnapshot(
-          instanceId,
-          timeRange,
-          MAX_CHART_POINTS,
-        );
-        if (!isMounted) {
-          return;
-        }
-
-        setHistorySnapshot(cachedSnapshot);
-        setMetricsError(
-          cachedSnapshot.sampleCount
-            ? `Could not refresh ${instanceId}. Showing saved history.`
-            : `CloudWatch unavailable at ${activeApiBaseUrl || "the configured endpoint"}.`,
-        );
-      } finally {
-        if (isMounted) {
-          setIsLoadingMetrics(false);
-        }
-      }
-    };
-
     void loadCachedHistory();
-    void loadMetrics();
-
-    const pollId = setInterval(() => {
-      void loadMetrics();
-    }, POLL_INTERVAL_MS);
 
     return () => {
       isMounted = false;
-      clearInterval(pollId);
     };
-  }, [instanceId, remoteRange, timeRange, refreshKey]);
+  }, [instanceId, timeRange]);
+
+  const { isAutoRefreshing, runRefresh } = useAutoRefresh({
+    enabled: Boolean(instanceId),
+    intervalMs: POLL_INTERVAL_MS,
+    onRefresh: loadMetrics,
+    refreshKeys: [instanceId, remoteRange, timeRange],
+  });
+
+  const retryMetricsLoad = useCallback(() => {
+    void runRefresh("manual");
+  }, [runRefresh]);
 
   let detailStateCard: React.ReactNode = null;
   if (isLoadingMetrics && !hasLiveMetrics && !hasHistory) {
@@ -446,6 +462,32 @@ export default function InstanceDetailScreen() {
             {formatTimestamp(displayUpdatedAt)}
           </Text>
         </View>
+        <View style={styles.summaryDivider} />
+        <View style={styles.liveRefreshRow}>
+          <View style={styles.liveRefreshBadge}>
+            <View
+              style={[
+                styles.liveRefreshDot,
+                (isLoadingMetrics || isAutoRefreshing) &&
+                  styles.liveRefreshDotActive,
+                metricsError && !hasLiveMetrics && styles.liveRefreshDotError,
+              ]}
+            />
+            <Text
+              style={[
+                styles.liveRefreshBadgeText,
+                metricsError &&
+                  !hasLiveMetrics &&
+                  styles.liveRefreshBadgeTextError,
+              ]}
+            >
+              Auto-refresh every 30s
+            </Text>
+          </View>
+          <Text style={styles.liveRefreshMeta}>
+            Last refresh: {formatRefreshTimestamp(lastRefreshedAt)}
+          </Text>
+        </View>
       </View>
 
       {detailStateCard ? (
@@ -533,6 +575,11 @@ export default function InstanceDetailScreen() {
                 {apiBaseUrl ? (
                   <Text style={styles.endpointText}>API: {apiBaseUrl}</Text>
                 ) : null}
+                <Text style={styles.refreshText}>
+                  {isAutoRefreshing
+                    ? "Auto-refreshing live metrics now…"
+                    : "Live metrics refresh automatically every 30 seconds while this screen is open."}
+                </Text>
               </View>
               <View style={styles.chartStats}>
                 <View style={styles.statBlock}>
@@ -669,6 +716,11 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     gap: 12,
   },
+  summaryDivider: {
+    marginVertical: 14,
+    height: 1,
+    backgroundColor: "#E2E8F0",
+  },
   summaryLabel: {
     fontSize: 12,
     color: "#64748B",
@@ -681,6 +733,49 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     flexShrink: 1,
     textAlign: "right",
+  },
+  liveRefreshRow: {
+    gap: 10,
+  },
+  liveRefreshBadge: {
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: "#F8FAFC",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  liveRefreshDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: "#10B981",
+    opacity: 0.45,
+  },
+  liveRefreshDotActive: {
+    opacity: 1,
+  },
+  liveRefreshDotError: {
+    backgroundColor: "#DC2626",
+    opacity: 1,
+  },
+  liveRefreshBadgeText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#0F766E",
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+  },
+  liveRefreshBadgeTextError: {
+    color: "#991B1B",
+  },
+  liveRefreshMeta: {
+    fontSize: 12,
+    color: "#475569",
   },
   statePill: {
     paddingHorizontal: 10,
@@ -762,6 +857,11 @@ const styles = StyleSheet.create({
     marginTop: 6,
     fontSize: 12,
     color: "#475569",
+  },
+  refreshText: {
+    marginTop: 6,
+    fontSize: 12,
+    color: "#0F766E",
   },
   chartStats: {
     flexDirection: "row",

@@ -1,18 +1,38 @@
-import { useFocusEffect } from "@react-navigation/native";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 
 import { InstanceCard } from "@/components/InstanceCard";
 import { ScreenStateCard } from "@/components/ScreenStateCard";
+import { useAutoRefresh, type RefreshReason } from "@/hooks/use-auto-refresh";
 import { buildInstanceDetailRoute, SETTINGS_ROUTE } from "@/navigation/routes";
 import { hydrateApiBaseUrl } from "@/services/apiBaseUrl";
 import { warmMonitoringHistory } from "@/services/metricsHistory";
 import type { MonitoringResponse, MonitoringInstance } from "api-client";
 import { fetchMonitoringOverview } from "api-client";
 
+const POLL_INTERVAL_MS = 30_000;
+const STATUS_TIMESTAMP_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  hour: "numeric",
+  minute: "2-digit",
+  second: "2-digit",
+});
+
 function ItemSeparator() {
   return <View style={styles.separator} />;
+}
+
+function formatStatusTimestamp(timestamp?: string | null): string {
+  if (!timestamp) {
+    return "Waiting for the first successful refresh";
+  }
+
+  const parsedTimestamp = new Date(timestamp);
+  if (Number.isNaN(parsedTimestamp.getTime())) {
+    return "Waiting for the first successful refresh";
+  }
+
+  return STATUS_TIMESTAMP_FORMATTER.format(parsedTimestamp);
 }
 
 export default function InstancesScreen() {
@@ -22,6 +42,7 @@ export default function InstancesScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState(
     "Loading live monitoring data...",
   );
@@ -31,7 +52,7 @@ export default function InstancesScreen() {
     hasInstancesRef.current = instances.length > 0;
   }, [instances.length]);
 
-  const loadInstances = useCallback(async () => {
+  const loadInstances = useCallback(async (reason: RefreshReason) => {
     const apiBaseUrl = await hydrateApiBaseUrl();
     const hasExistingInstances = hasInstancesRef.current;
 
@@ -42,17 +63,26 @@ export default function InstancesScreen() {
     } else {
       setIsLoading(true);
     }
-    setStatusMessage(`Connecting to ${apiBaseUrl}...`);
+    setStatusMessage(
+      reason === "auto" && hasExistingInstances
+        ? `Auto-refreshing live metrics from ${apiBaseUrl}...`
+        : hasExistingInstances
+          ? `Refreshing live data from ${apiBaseUrl}...`
+          : `Connecting to ${apiBaseUrl}...`,
+    );
 
     try {
       const instancesResponse: MonitoringResponse =
         await fetchMonitoringOverview();
       const liveInstances = instancesResponse.instances ?? [];
       setInstances(liveInstances);
+      setLastUpdatedAt(instancesResponse.timestamp ?? new Date().toISOString());
       setErrorMessage(null);
 
       if (liveInstances.length) {
-        setStatusMessage(`Live data connected to ${apiBaseUrl}.`);
+        setStatusMessage(
+          `Live data connected to ${apiBaseUrl}. Auto-refresh runs every 30 seconds while this screen is open.`,
+        );
 
         // Warm local history in the background so the detail screen can open fast.
         void Promise.allSettled(
@@ -60,7 +90,7 @@ export default function InstancesScreen() {
         );
       } else {
         setStatusMessage(
-          `Connected to ${apiBaseUrl}, but no running instances were returned.`,
+          `Connected to ${apiBaseUrl}. The screen will keep checking every 30 seconds, but no running instances were returned.`,
         );
       }
     } catch {
@@ -76,26 +106,22 @@ export default function InstancesScreen() {
       setIsRefreshing(false);
     }
   }, []);
-
-  useFocusEffect(
-    useCallback(() => {
-      try {
-        void loadInstances();
-      } catch {
-        // The async loader handles its own state and errors.
-      }
-    }, [loadInstances]),
-  );
+  const { isAutoRefreshing, runRefresh } = useAutoRefresh({
+    intervalMs: POLL_INTERVAL_MS,
+    onRefresh: loadInstances,
+  });
 
   const handleRetry = useCallback(() => {
-    void loadInstances();
-  }, [loadInstances]);
+    void runRefresh("manual");
+  }, [runRefresh]);
 
   const handleOpenSettings = useCallback(() => {
     router.push(SETTINGS_ROUTE);
   }, [router]);
 
   const hasInstances = instances.length > 0;
+  const shouldShowStatusCard =
+    hasInstances || isRefreshing || isAutoRefreshing || lastUpdatedAt !== null;
 
   const renderItem = ({ item }: { item: MonitoringInstance }) => (
     <Pressable
@@ -124,15 +150,46 @@ export default function InstancesScreen() {
     <View style={styles.header}>
       <Text style={styles.title}>Instances</Text>
       <Text style={styles.subtitle}>EC2 name, IDs, state, and type</Text>
-      {hasInstances || isRefreshing ? (
+      {shouldShowStatusCard ? (
         <View
           style={[styles.statusCard, errorMessage && styles.statusCardError]}
         >
           <Text
             style={[styles.statusText, errorMessage && styles.statusTextError]}
           >
-            {isRefreshing ? "Refreshing live data..." : statusMessage}
+            {isAutoRefreshing
+              ? "Auto-refreshing live data..."
+              : isRefreshing
+                ? "Refreshing live data..."
+                : statusMessage}
           </Text>
+          <View style={styles.statusMetaRow}>
+            <View style={styles.liveBadge}>
+              <View
+                style={[
+                  styles.liveDot,
+                  (isRefreshing || isAutoRefreshing) && styles.liveDotActive,
+                  errorMessage && styles.liveDotError,
+                ]}
+              />
+              <Text
+                style={[
+                  styles.liveBadgeText,
+                  errorMessage && styles.liveBadgeTextError,
+                ]}
+              >
+                Refreshes every 30s
+              </Text>
+            </View>
+            <Text
+              style={[
+                styles.statusMetaText,
+                errorMessage && styles.statusMetaTextError,
+              ]}
+            >
+              Last update: {formatStatusTimestamp(lastUpdatedAt)}
+            </Text>
+          </View>
         </View>
       ) : null}
     </View>
@@ -167,7 +224,7 @@ export default function InstancesScreen() {
       <ScreenStateCard
         variant="empty"
         title="No running instances"
-        message="The monitoring endpoint responded, but there are no EC2 instances to show right now."
+        message="The monitoring endpoint responded, but there are no EC2 instances to show right now. This screen will keep checking automatically every 30 seconds."
         actions={[{ label: "Refresh", onPress: handleRetry, tone: "primary" }]}
       />
     );
@@ -231,6 +288,51 @@ const styles = StyleSheet.create({
     color: "#065F46",
   },
   statusTextError: {
+    color: "#991B1B",
+  },
+  statusMetaRow: {
+    marginTop: 8,
+    gap: 8,
+  },
+  liveBadge: {
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: "#FFFFFF",
+  },
+  liveDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: "#10B981",
+    opacity: 0.5,
+  },
+  liveDotActive: {
+    opacity: 1,
+  },
+  liveDotError: {
+    backgroundColor: "#DC2626",
+    opacity: 1,
+  },
+  liveBadgeText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#065F46",
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+  },
+  liveBadgeTextError: {
+    color: "#991B1B",
+  },
+  statusMetaText: {
+    fontSize: 12,
+    color: "#166534",
+  },
+  statusMetaTextError: {
     color: "#991B1B",
   },
   listContent: {
