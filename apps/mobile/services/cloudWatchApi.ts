@@ -1,4 +1,4 @@
-import type { InstanceState } from "@/types/instances";
+import type { InstanceState } from "api-client";
 
 const DEFAULT_API_BASE_URL = "http://localhost:5000";
 const API_BASE_URL =
@@ -28,7 +28,9 @@ function buildMonitoringUrl(range?: string): string {
   return `${base}/monitoring?range=${encodeURIComponent(range)}`;
 }
 
-export async function fetchMonitoring(range?: string): Promise<MonitoringInstance[]> {
+export async function fetchMonitoring(
+  range?: string,
+): Promise<MonitoringInstance[]> {
   const res = await fetch(buildMonitoringUrl(range));
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -41,7 +43,7 @@ export async function fetchMonitoring(range?: string): Promise<MonitoringInstanc
 
 export async function fetchInstanceMonitoring(
   instanceId: string,
-  range?: string
+  range?: string,
 ): Promise<MonitoringInstance | null> {
   const instances = await fetchMonitoring(range);
   return instances.find((instance) => instance.id === instanceId) ?? null;

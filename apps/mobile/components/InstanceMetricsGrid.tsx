@@ -53,7 +53,7 @@ export function InstanceMetricsGrid({
     <View style={styles.grid}>
       {METRIC_ITEMS.map((item) => (
         <View
-          key={item.key}
+          key={String(item.key)}
           style={[styles.metricCard, compact && styles.metricCardCompact]}
         >
           <Text style={styles.metricLabel}>{item.label}</Text>

@@ -1,29 +1,48 @@
 import { useFocusEffect } from "@react-navigation/native";
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
-import { useRouter } from "expo-router";
+import { useRouter, type Href } from "expo-router";
 
 import { InstanceCard } from "@/components/InstanceCard";
+import { ScreenStateCard } from "@/components/ScreenStateCard";
 import { hydrateApiBaseUrl } from "@/services/apiBaseUrl";
 import { warmMonitoringHistory } from "@/services/metricsHistory";
 import type { MonitoringResponse, MonitoringInstance } from "api-client";
 import { fetchMonitoringOverview } from "api-client";
-import { mockInstances } from "@/data/mockInstances";
 
 function ItemSeparator() {
   return <View style={styles.separator} />;
 }
 
+const SETTINGS_ROUTE = "/tabs/settings" as Href;
+
 export default function InstancesScreen() {
   const router = useRouter();
   const [instances, setInstances] = useState<MonitoringInstance[]>([]);
-  const [isError, setIsError] = useState(false);
+  const [activeApiBaseUrl, setActiveApiBaseUrl] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState(
     "Loading live monitoring data...",
   );
+  const hasInstancesRef = useRef(false);
+
+  useEffect(() => {
+    hasInstancesRef.current = instances.length > 0;
+  }, [instances.length]);
 
   const loadInstances = useCallback(async () => {
     const apiBaseUrl = await hydrateApiBaseUrl();
+    const hasExistingInstances = hasInstancesRef.current;
+
+    setActiveApiBaseUrl(apiBaseUrl);
+    setErrorMessage(null);
+    if (hasExistingInstances) {
+      setIsRefreshing(true);
+    } else {
+      setIsLoading(true);
+    }
     setStatusMessage(`Connecting to ${apiBaseUrl}...`);
 
     try {
@@ -31,7 +50,7 @@ export default function InstancesScreen() {
         await fetchMonitoringOverview();
       const liveInstances = instancesResponse.instances ?? [];
       setInstances(liveInstances);
-      setIsError(false);
+      setErrorMessage(null);
 
       if (liveInstances.length) {
         setStatusMessage(`Live data connected to ${apiBaseUrl}.`);
@@ -46,10 +65,16 @@ export default function InstancesScreen() {
         );
       }
     } catch {
-      setIsError(true);
+      const nextErrorMessage = `Could not reach ${apiBaseUrl}. Open Settings to update the API URL and try again.`;
+      setErrorMessage(nextErrorMessage);
       setStatusMessage(
-        `Could not reach ${apiBaseUrl}. Open Settings to update the API URL. Showing mock data.`,
+        hasExistingInstances
+          ? `Could not refresh ${apiBaseUrl}. Showing the last successful instance list.`
+          : nextErrorMessage,
       );
+    } finally {
+      setIsLoading(false);
+      setIsRefreshing(false);
     }
   }, []);
 
@@ -63,13 +88,17 @@ export default function InstancesScreen() {
     }, [loadInstances]),
   );
 
-  const displayInstances = instances.length ? instances : mockInstances;
+  const handleRetry = useCallback(() => {
+    void loadInstances();
+  }, [loadInstances]);
 
-  const renderItem = ({
-    item,
-  }: {
-    item: MonitoringInstance | (typeof mockInstances)[number];
-  }) => (
+  const handleOpenSettings = useCallback(() => {
+    router.push(SETTINGS_ROUTE);
+  }, [router]);
+
+  const hasInstances = instances.length > 0;
+
+  const renderItem = ({ item }: { item: MonitoringInstance }) => (
     <Pressable
       accessibilityRole="button"
       onPress={() =>
@@ -97,22 +126,69 @@ export default function InstancesScreen() {
     <View style={styles.header}>
       <Text style={styles.title}>Instances</Text>
       <Text style={styles.subtitle}>EC2 name, IDs, state, and type</Text>
-      <View style={[styles.statusCard, isError && styles.statusCardError]}>
-        <Text style={[styles.statusText, isError && styles.statusTextError]}>
-          {statusMessage}
-        </Text>
-      </View>
+      {hasInstances || isRefreshing ? (
+        <View
+          style={[styles.statusCard, errorMessage && styles.statusCardError]}
+        >
+          <Text
+            style={[styles.statusText, errorMessage && styles.statusTextError]}
+          >
+            {isRefreshing ? "Refreshing live data..." : statusMessage}
+          </Text>
+        </View>
+      ) : null}
     </View>
   );
 
+  const renderEmptyState = () => {
+    if (isLoading) {
+      return (
+        <ScreenStateCard
+          variant="loading"
+          title="Loading instances"
+          message={`Connecting to ${activeApiBaseUrl || "the configured monitoring endpoint"} and fetching the latest EC2 status.`}
+        />
+      );
+    }
+
+    if (errorMessage) {
+      return (
+        <ScreenStateCard
+          variant="error"
+          title="Couldn’t load instances"
+          message={errorMessage}
+          actions={[
+            { label: "Try Again", onPress: handleRetry, tone: "primary" },
+            { label: "Open Settings", onPress: handleOpenSettings },
+          ]}
+        />
+      );
+    }
+
+    return (
+      <ScreenStateCard
+        variant="empty"
+        title="No running instances"
+        message="The monitoring endpoint responded, but there are no EC2 instances to show right now."
+        actions={[{ label: "Refresh", onPress: handleRetry, tone: "primary" }]}
+      />
+    );
+  };
+
   return (
     <FlatList
-      data={displayInstances}
-      keyExtractor={(item, index) => `${item.id}-${index}`}
+      data={instances}
+      keyExtractor={(item) => item.id}
       renderItem={renderItem}
       ListHeaderComponent={renderHeader()}
-      contentContainerStyle={styles.listContent}
+      ListEmptyComponent={renderEmptyState}
+      contentContainerStyle={[
+        styles.listContent,
+        !hasInstances && styles.listContentEmpty,
+      ]}
       ItemSeparatorComponent={ItemSeparator}
+      onRefresh={handleRetry}
+      refreshing={hasInstances ? isRefreshing : false}
       showsVerticalScrollIndicator={false}
       style={styles.safeArea}
     />
@@ -163,6 +239,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 20,
     paddingBottom: 24,
+  },
+  listContentEmpty: {
+    flexGrow: 1,
   },
   cardWrapper: {
     borderRadius: 16,

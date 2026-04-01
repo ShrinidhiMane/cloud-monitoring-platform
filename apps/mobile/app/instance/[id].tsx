@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import { Stack, useLocalSearchParams, useRouter, type Href } from "expo-router";
 
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 
 import { CpuUsageChart } from "@/components/CpuUsageChart";
+import { ScreenStateCard } from "@/components/ScreenStateCard";
 import {
   TimeRangeSelector,
   type TimeRangeOption,
@@ -56,6 +57,8 @@ const DETAIL_TIMESTAMP_FORMATTER = new Intl.DateTimeFormat("en-US", {
   dateStyle: "medium",
   timeStyle: "short",
 });
+const SETTINGS_ROUTE = "/tabs/settings" as Href;
+const TABS_ROUTE = "/tabs" as Href;
 
 interface MetricTileProps {
   label: string;
@@ -152,11 +155,12 @@ export default function InstanceDetailScreen() {
 
   const [timeRange, setTimeRange] = useState<TimeRangeOption>("1h");
   const [monitoring, setMonitoring] = useState<MonitoringInstance | null>(null);
-  const [isLoadingMetrics, setIsLoadingMetrics] = useState(false);
+  const [isLoadingMetrics, setIsLoadingMetrics] = useState(true);
   const [metricsError, setMetricsError] = useState<string | null>(null);
   const [historySnapshot, setHistorySnapshot] =
     useState<CachedCpuHistorySnapshot>(EMPTY_HISTORY_SNAPSHOT);
   const [apiBaseUrl, setCurrentApiBaseUrl] = useState("");
+  const [refreshKey, setRefreshKey] = useState(0);
   const remoteRange = timeRange === "7d" ? "24h" : timeRange;
 
   const displayName =
@@ -169,12 +173,24 @@ export default function InstanceDetailScreen() {
     monitoring?.updatedAt ?? historySnapshot.latestTimestamp;
   const latestCpuValue =
     monitoring?.cpuPercent ?? historySnapshot.latestCpuPercent;
+  const hasHistory = historySnapshot.sampleCount > 0;
+  const hasChartData = historySnapshot.chartSeries.length > 0;
+  const hasLiveMetrics = monitoring !== null;
+
+  const retryMetricsLoad = useCallback(() => {
+    setRefreshKey((currentValue) => currentValue + 1);
+  }, []);
+
+  const openSettings = useCallback(() => {
+    router.push(SETTINGS_ROUTE);
+  }, [router]);
 
   useEffect(() => {
     if (!instanceId) {
       setMetricsError("This route is missing an instance id.");
       setMonitoring(null);
       setHistorySnapshot(EMPTY_HISTORY_SNAPSHOT);
+      setIsLoadingMetrics(false);
       return;
     }
 
@@ -275,7 +291,46 @@ export default function InstanceDetailScreen() {
       isMounted = false;
       clearInterval(pollId);
     };
-  }, [instanceId, remoteRange, timeRange]);
+  }, [instanceId, remoteRange, timeRange, refreshKey]);
+
+  let detailStateCard: React.ReactNode = null;
+  if (isLoadingMetrics && !hasLiveMetrics && !hasHistory) {
+    detailStateCard = (
+      <ScreenStateCard
+        variant="loading"
+        title="Loading instance metrics"
+        message={`Connecting to ${apiBaseUrl || "the configured monitoring endpoint"} and collecting the latest instance telemetry.`}
+      />
+    );
+  } else if (metricsError && !hasLiveMetrics && !hasHistory) {
+    detailStateCard = (
+      <ScreenStateCard
+        variant="error"
+        title="Couldn’t load metrics"
+        message={metricsError}
+        actions={[
+          { label: "Try Again", onPress: retryMetricsLoad, tone: "primary" },
+          { label: "Open Settings", onPress: openSettings },
+        ]}
+      />
+    );
+  } else if (
+    !isLoadingMetrics &&
+    !metricsError &&
+    !hasLiveMetrics &&
+    !hasHistory
+  ) {
+    detailStateCard = (
+      <ScreenStateCard
+        variant="empty"
+        title="No metrics yet"
+        message="This instance does not have any live or saved samples in the selected range."
+        actions={[
+          { label: "Refresh", onPress: retryMetricsLoad, tone: "primary" },
+        ]}
+      />
+    );
+  }
 
   if (!instanceId) {
     return (
@@ -289,7 +344,7 @@ export default function InstanceDetailScreen() {
                 accessibilityRole="button"
                 hitSlop={10}
                 onPress={() => {
-                  router.replace("/tabs");
+                  router.replace(TABS_ROUTE);
                 }}
                 style={({ pressed }) => [
                   styles.headerBackButton,
@@ -329,7 +384,7 @@ export default function InstanceDetailScreen() {
                   return;
                 }
 
-                router.replace("/tabs");
+                router.replace(TABS_ROUTE);
               }}
               style={({ pressed }) => [
                 styles.headerBackButton,
@@ -394,69 +449,163 @@ export default function InstanceDetailScreen() {
         </View>
       </View>
 
-      <View style={styles.metricsCard}>
-        <Text style={styles.sectionTitle}>Live Metrics</Text>
-        <View style={styles.metricGrid}>
-          <MetricTile label="CPU" value={formatPercent(latestCpuValue)} />
-          <MetricTile
-            label="Memory"
-            value={formatPercent(monitoring?.memoryPercent)}
-          />
-          <MetricTile
-            label="Network In"
-            value={formatBytes(monitoring?.networkInBytes)}
-          />
-          <MetricTile
-            label="Network Out"
-            value={formatBytes(monitoring?.networkOutBytes)}
-          />
-          <MetricTile
-            label="Disk Read Ops"
-            value={formatCompactNumber(monitoring?.diskReadOps)}
-          />
-          <MetricTile
-            label="Disk Write Ops"
-            value={formatCompactNumber(monitoring?.diskWriteOps)}
-          />
-        </View>
-      </View>
+      {detailStateCard ? (
+        detailStateCard
+      ) : (
+        <>
+          <View style={styles.metricsCard}>
+            <Text style={styles.sectionTitle}>Live Metrics</Text>
+            {hasLiveMetrics ? (
+              <View style={styles.metricGrid}>
+                <MetricTile label="CPU" value={formatPercent(latestCpuValue)} />
+                <MetricTile
+                  label="Memory"
+                  value={formatPercent(monitoring?.memoryPercent)}
+                />
+                <MetricTile
+                  label="Network In"
+                  value={formatBytes(monitoring?.networkInBytes)}
+                />
+                <MetricTile
+                  label="Network Out"
+                  value={formatBytes(monitoring?.networkOutBytes)}
+                />
+                <MetricTile
+                  label="Disk Read Ops"
+                  value={formatCompactNumber(monitoring?.diskReadOps)}
+                />
+                <MetricTile
+                  label="Disk Write Ops"
+                  value={formatCompactNumber(monitoring?.diskWriteOps)}
+                />
+              </View>
+            ) : (
+              <ScreenStateCard
+                compact
+                variant={
+                  metricsError
+                    ? "error"
+                    : isLoadingMetrics
+                      ? "loading"
+                      : "empty"
+                }
+                title={
+                  metricsError
+                    ? "Live metrics unavailable"
+                    : isLoadingMetrics
+                      ? "Refreshing live metrics"
+                      : "No live snapshot yet"
+                }
+                message={
+                  metricsError
+                    ? metricsError
+                    : isLoadingMetrics
+                      ? "Trying to refresh the latest CPU, memory, network, and disk usage."
+                      : "This instance has no live snapshot right now."
+                }
+                actions={
+                  metricsError
+                    ? [
+                        {
+                          label: "Try Again",
+                          onPress: retryMetricsLoad,
+                          tone: "primary",
+                        },
+                      ]
+                    : undefined
+                }
+              />
+            )}
+          </View>
 
-      <View style={styles.chartCard}>
-        <View style={styles.chartHeader}>
-          <View style={styles.chartHeaderText}>
-            <Text style={styles.chartTitle}>CPU Utilization</Text>
-            <Text style={styles.chartSubtitle}>
-              Selected range: {timeRange}
-            </Text>
-            {historySnapshot.sampleCount > 0 ? (
-              <Text style={styles.cacheText}>
-                Chart history is being rendered from saved on-device samples.
-              </Text>
-            ) : null}
-            {apiBaseUrl ? (
-              <Text style={styles.endpointText}>API: {apiBaseUrl}</Text>
-            ) : null}
-            {isLoadingMetrics ? (
-              <Text style={styles.loadingText}>Loading metrics…</Text>
-            ) : null}
-            {metricsError ? (
-              <Text style={styles.errorText}>{metricsError}</Text>
-            ) : null}
-          </View>
-          <View style={styles.chartStats}>
-            <View style={styles.statBlock}>
-              <Text style={styles.statLabel}>Avg</Text>
-              <Text style={styles.statValue}>{historySnapshot.average}%</Text>
+          <View style={styles.chartCard}>
+            <View style={styles.chartHeader}>
+              <View style={styles.chartHeaderText}>
+                <Text style={styles.chartTitle}>CPU Utilization</Text>
+                <Text style={styles.chartSubtitle}>
+                  Selected range: {timeRange}
+                </Text>
+                {hasHistory ? (
+                  <Text style={styles.cacheText}>
+                    Chart history is being rendered from saved on-device
+                    samples.
+                  </Text>
+                ) : null}
+                {apiBaseUrl ? (
+                  <Text style={styles.endpointText}>API: {apiBaseUrl}</Text>
+                ) : null}
+              </View>
+              <View style={styles.chartStats}>
+                <View style={styles.statBlock}>
+                  <Text style={styles.statLabel}>Avg</Text>
+                  <Text style={styles.statValue}>
+                    {historySnapshot.average}%
+                  </Text>
+                </View>
+                <View style={styles.statBlock}>
+                  <Text style={styles.statLabel}>Peak</Text>
+                  <Text style={styles.statValue}>{historySnapshot.peak}%</Text>
+                </View>
+              </View>
             </View>
-            <View style={styles.statBlock}>
-              <Text style={styles.statLabel}>Peak</Text>
-              <Text style={styles.statValue}>{historySnapshot.peak}%</Text>
-            </View>
+            <TimeRangeSelector value={timeRange} onChange={setTimeRange} />
+            {metricsError && hasHistory ? (
+              <ScreenStateCard
+                compact
+                variant="error"
+                title="Showing saved history"
+                message={metricsError}
+                actions={[
+                  {
+                    label: "Retry Live Data",
+                    onPress: retryMetricsLoad,
+                    tone: "primary",
+                  },
+                ]}
+              />
+            ) : null}
+            {hasChartData ? (
+              <CpuUsageChart data={historySnapshot.chartSeries} />
+            ) : (
+              <ScreenStateCard
+                compact
+                variant={
+                  isLoadingMetrics
+                    ? "loading"
+                    : metricsError
+                      ? "error"
+                      : "empty"
+                }
+                title={
+                  isLoadingMetrics
+                    ? "Loading chart"
+                    : metricsError
+                      ? "Chart unavailable"
+                      : "No CPU samples yet"
+                }
+                message={
+                  isLoadingMetrics
+                    ? "Pulling CPU samples for the selected time range."
+                    : metricsError
+                      ? metricsError
+                      : "This instance does not have any CPU samples in the selected range."
+                }
+                actions={
+                  metricsError
+                    ? [
+                        {
+                          label: "Try Again",
+                          onPress: retryMetricsLoad,
+                          tone: "primary",
+                        },
+                      ]
+                    : undefined
+                }
+              />
+            )}
           </View>
-        </View>
-        <TimeRangeSelector value={timeRange} onChange={setTimeRange} />
-        <CpuUsageChart data={historySnapshot.chartSeries} />
-      </View>
+        </>
+      )}
     </ScrollView>
   );
 }
@@ -605,11 +754,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: "#64748B",
   },
-  loadingText: {
-    marginTop: 6,
-    fontSize: 12,
-    color: "#94A3B8",
-  },
   cacheText: {
     marginTop: 6,
     fontSize: 12,
@@ -619,11 +763,6 @@ const styles = StyleSheet.create({
     marginTop: 6,
     fontSize: 12,
     color: "#475569",
-  },
-  errorText: {
-    marginTop: 6,
-    fontSize: 12,
-    color: "#DC2626",
   },
   chartStats: {
     flexDirection: "row",
