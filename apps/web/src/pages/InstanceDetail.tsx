@@ -5,7 +5,7 @@ import {
   useEffectEvent,
   useState,
 } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { fetchInstanceMonitoring, type MonitoringInstance } from "api-client";
 import CpuLineChart from "../components/CpuLineChart";
 
@@ -142,10 +142,34 @@ export default function InstanceDetail() {
   const refreshLabel = isRefreshing
     ? "Refreshing now"
     : `Last sample ${formatAge(monitoring?.updatedAt)}`;
+  const recentMetrics = [
+    {
+      label: "Network Out",
+      value: formatCompactNumber(monitoring?.networkOutBytes ?? 0),
+    },
+    {
+      label: "Disk Reads",
+      value: formatCompactNumber(monitoring?.diskReadOps ?? 0),
+    },
+    {
+      label: "Disk Writes",
+      value: formatCompactNumber(monitoring?.diskWriteOps ?? 0),
+    },
+    {
+      label: "Last Updated",
+      value: formatAge(monitoring?.updatedAt),
+    },
+  ];
 
   return (
     <div className="page">
-      <section className="section">
+      <section className="section" id="instance-summary">
+        <div className="breadcrumbs" aria-label="Breadcrumb">
+          <Link to="/instances">Instances</Link>
+          <span>/</span>
+          <span className="breadcrumb-current">{title}</span>
+        </div>
+
         <div className="page-header">
           <div>
             <div className="eyebrow">Instance Detail</div>
@@ -156,12 +180,30 @@ export default function InstanceDetail() {
             </p>
           </div>
           <div className="header-actions">
+            <Link className="btn ghost" to="/instances">
+              Back to Fleet
+            </Link>
+            <Link className="btn ghost" to="/instances?view=alerts">
+              Alert Queue
+            </Link>
             <span className="live-pill">
               {isRefreshing ? "Refreshing" : "Live"}
             </span>
             <span className="live-pill muted">{refreshLabel}</span>
           </div>
         </div>
+
+        <nav className="page-nav" aria-label="Instance detail sections">
+          <a className="page-nav-link" href="#instance-summary">
+            Summary
+          </a>
+          <a className="page-nav-link" href="#cpu-chart">
+            CPU Graph
+          </a>
+          <a className="page-nav-link" href="#recent-metrics">
+            Recent Metrics
+          </a>
+        </nav>
 
         <div className="detail-grid">
           <div className="detail-card">
@@ -188,10 +230,10 @@ export default function InstanceDetail() {
             </div>
             <p className="detail-caption">Latest CWAgent memory percentage.</p>
           </div>
-        ) : null}
+        </div>
       </section>
 
-      <section className="panel">
+      <section className="panel" id="cpu-chart">
         <div className="panel-header">
           <div>
             <div className="panel-title">CPU Utilization</div>
@@ -256,28 +298,18 @@ export default function InstanceDetail() {
         </div>
       </section>
 
-      <section className="panel">
+      <section className="panel" id="recent-metrics">
         <div className="panel-header">
           <div className="panel-title">Recent Metrics</div>
           <span className="status-inline">Auto-refresh every 15s</span>
         </div>
         <div className="event-list">
-          <div className="event-item">
-            <div>Network Out</div>
-            <div>{formatCompactNumber(monitoring?.networkOutBytes ?? 0)}</div>
-          </div>
-          <div className="event-item">
-            <div>Disk Reads</div>
-            <div>{formatCompactNumber(monitoring?.diskReadOps ?? 0)}</div>
-          </div>
-          <div className="event-item">
-            <div>Disk Writes</div>
-            <div>{formatCompactNumber(monitoring?.diskWriteOps ?? 0)}</div>
-          </div>
-          <div className="event-item">
-            <div>Last Updated</div>
-            <div>{formatAge(monitoring?.updatedAt)}</div>
-          </div>
+          {recentMetrics.map((metric) => (
+            <div key={metric.label} className="event-item">
+              <div>{metric.label}</div>
+              <div>{metric.value}</div>
+            </div>
+          ))}
         </div>
       </section>
     </div>

@@ -4,6 +4,10 @@
   flex-direction: column;
 }
 
+.app-main {
+  flex: 1;
+}
+
 .topbar {
   display: flex;
   align-items: center;
@@ -101,6 +105,41 @@
   font-weight: 600;
 }
 
+.shell-banner {
+  width: min(1200px, 100% - 48px);
+  margin: 0 auto;
+  padding-top: 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.shell-copy {
+  display: grid;
+  gap: 6px;
+}
+
+.shell-title {
+  margin: 0;
+  font-family: "Instrument Serif", serif;
+  font-size: clamp(1.8rem, 2.3vw, 2.5rem);
+  font-weight: 400;
+}
+
+.shell-subtitle {
+  margin: 0;
+  color: var(--muted);
+  max-width: 720px;
+}
+
+.shell-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .page {
   width: min(1200px, 100% - 48px);
   margin: 32px auto 64px;
@@ -114,6 +153,11 @@
   display: flex;
   flex-direction: column;
   gap: 24px;
+}
+
+.section[id],
+.panel[id] {
+  scroll-margin-top: 148px;
 }
 
 .page-header {
@@ -148,6 +192,45 @@
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.breadcrumbs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+.breadcrumb-current {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.page-nav {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.page-nav-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 9px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--muted);
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.page-nav-link:hover {
+  border-color: rgba(28, 139, 122, 0.28);
+  background: var(--card);
+  color: var(--accent-strong);
 }
 
 .btn {
@@ -229,6 +312,10 @@
   box-shadow: var(--shadow);
 }
 
+.compact-panel {
+  padding: 18px;
+}
+
 .panel-header {
   display: flex;
   justify-content: space-between;
@@ -251,6 +338,55 @@
   min-width: 220px;
 }
 
+.overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.shortcut-list {
+  display: grid;
+  gap: 10px;
+}
+
+.shortcut-link {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--card-2);
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.shortcut-link:hover,
+.shortcut-item:hover {
+  transform: translateY(-1px);
+}
+
+.shortcut-hint {
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 500;
+}
+
+.shortcut-item {
+  transition: transform 0.2s ease;
+}
+
+.shortcut-item strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.spotlight-card {
+  display: grid;
+  gap: 16px;
+}
+
 .card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -261,7 +397,11 @@
   padding: 18px;
   border-radius: 16px;
   border: 1px solid var(--border);
-  background: linear-gradient(150deg, rgba(255, 255, 255, 0.95), rgba(255, 248, 238, 0.8));
+  background: linear-gradient(
+    150deg,
+    rgba(255, 255, 255, 0.95),
+    rgba(255, 248, 238, 0.8)
+  );
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -273,7 +413,11 @@
   content: "";
   position: absolute;
   inset: 0;
-  background: linear-gradient(120deg, rgba(28, 139, 122, 0.08), transparent 60%);
+  background: linear-gradient(
+    120deg,
+    rgba(28, 139, 122, 0.08),
+    transparent 60%
+  );
   opacity: 0;
   transition: opacity 0.3s ease;
 }
@@ -490,8 +634,17 @@
   padding: 20px;
   border-radius: 16px;
   border: 1px dashed var(--border);
-  background: linear-gradient(120deg, rgba(28, 139, 122, 0.08), rgba(224, 122, 47, 0.08));
+  background: linear-gradient(
+    120deg,
+    rgba(28, 139, 122, 0.08),
+    rgba(224, 122, 47, 0.08)
+  );
   color: var(--muted);
+}
+
+.compact-empty {
+  min-height: 0;
+  padding: 24px 20px;
 }
 
 .metric-grid {
@@ -592,6 +745,15 @@
     align-items: flex-start;
   }
 
+  .shell-banner {
+    width: min(1200px, 100% - 32px);
+  }
+
+  .page {
+    width: min(1200px, 100% - 32px);
+    margin-top: 24px;
+  }
+
   .meta {
     width: 100%;
     justify-content: flex-start;
@@ -608,5 +770,9 @@
 
   .cpu-chart-axis {
     font-size: 0.75rem;
+  }
+
+  .page-nav-link {
+    flex: 1 1 calc(50% - 8px);
   }
 }
