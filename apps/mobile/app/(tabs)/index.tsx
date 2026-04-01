@@ -7,6 +7,10 @@ import { ScreenStateCard } from "@/components/ScreenStateCard";
 import { useAutoRefresh, type RefreshReason } from "@/hooks/use-auto-refresh";
 import { buildInstanceDetailRoute, SETTINGS_ROUTE } from "@/navigation/routes";
 import { hydrateApiBaseUrl } from "@/services/apiBaseUrl";
+import {
+  cacheMonitoringOverview,
+  readCachedMonitoringOverview,
+} from "@/services/monitoringCache";
 import { warmMonitoringHistory } from "@/services/metricsHistory";
 import type { MonitoringResponse, MonitoringInstance } from "api-client";
 import { fetchMonitoringOverview } from "api-client";
@@ -42,70 +46,155 @@ export default function InstancesScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isUsingCachedData, setIsUsingCachedData] = useState(false);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState(
     "Loading live monitoring data...",
   );
   const hasInstancesRef = useRef(false);
+  const activeApiBaseUrlRef = useRef("");
+  const hasLoadedLiveOverviewRef = useRef(false);
 
   useEffect(() => {
     hasInstancesRef.current = instances.length > 0;
   }, [instances.length]);
 
-  const loadInstances = useCallback(async (reason: RefreshReason) => {
-    const apiBaseUrl = await hydrateApiBaseUrl();
-    const hasExistingInstances = hasInstancesRef.current;
+  useEffect(() => {
+    activeApiBaseUrlRef.current = activeApiBaseUrl;
+  }, [activeApiBaseUrl]);
 
-    setActiveApiBaseUrl(apiBaseUrl);
-    setErrorMessage(null);
-    if (hasExistingInstances) {
-      setIsRefreshing(true);
-    } else {
-      setIsLoading(true);
+  const loadCachedOverview = useCallback(async (apiBaseUrl: string) => {
+    const cachedOverview = await readCachedMonitoringOverview(apiBaseUrl);
+    if (!cachedOverview) {
+      return false;
     }
+
+    setInstances(cachedOverview.response.instances);
+    setLastUpdatedAt(
+      cachedOverview.response.timestamp ?? cachedOverview.cachedAt,
+    );
+    setIsUsingCachedData(true);
+    setIsLoading(false);
     setStatusMessage(
-      reason === "auto" && hasExistingInstances
-        ? `Auto-refreshing live metrics from ${apiBaseUrl}...`
-        : hasExistingInstances
-          ? `Refreshing live data from ${apiBaseUrl}...`
-          : `Connecting to ${apiBaseUrl}...`,
+      cachedOverview.response.instances.length
+        ? `Showing saved metrics from ${apiBaseUrl} while live data reconnects.`
+        : `Showing the last saved response from ${apiBaseUrl} while live data reconnects.`,
     );
 
-    try {
-      const instancesResponse: MonitoringResponse =
-        await fetchMonitoringOverview();
-      const liveInstances = instancesResponse.instances ?? [];
-      setInstances(liveInstances);
-      setLastUpdatedAt(instancesResponse.timestamp ?? new Date().toISOString());
-      setErrorMessage(null);
-
-      if (liveInstances.length) {
-        setStatusMessage(
-          `Live data connected to ${apiBaseUrl}. Auto-refresh runs every 30 seconds while this screen is open.`,
-        );
-
-        // Warm local history in the background so the detail screen can open fast.
-        void Promise.allSettled(
-          liveInstances.map((instance) => warmMonitoringHistory(instance)),
-        );
-      } else {
-        setStatusMessage(
-          `Connected to ${apiBaseUrl}. The screen will keep checking every 30 seconds, but no running instances were returned.`,
-        );
-      }
-    } catch {
-      const nextErrorMessage = `Could not reach ${apiBaseUrl}. Open Settings to update the API URL and try again.`;
-      setErrorMessage(nextErrorMessage);
-      setStatusMessage(
-        hasExistingInstances
-          ? `Could not refresh ${apiBaseUrl}. Showing the last successful instance list.`
-          : nextErrorMessage,
-      );
-    } finally {
-      setIsLoading(false);
-      setIsRefreshing(false);
-    }
+    return true;
   }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const hydrateFromCache = async () => {
+      const apiBaseUrl = await hydrateApiBaseUrl();
+      if (!isMounted) {
+        return;
+      }
+
+      setActiveApiBaseUrl(apiBaseUrl);
+      const cachedOverview = await readCachedMonitoringOverview(apiBaseUrl);
+      if (!isMounted || !cachedOverview || hasLoadedLiveOverviewRef.current) {
+        return;
+      }
+
+      setInstances(cachedOverview.response.instances);
+      setLastUpdatedAt(
+        cachedOverview.response.timestamp ?? cachedOverview.cachedAt,
+      );
+      setIsUsingCachedData(true);
+      setIsLoading(false);
+      setStatusMessage(
+        cachedOverview.response.instances.length
+          ? `Showing saved metrics from ${apiBaseUrl} while live data reconnects.`
+          : `Showing the last saved response from ${apiBaseUrl} while live data reconnects.`,
+      );
+    };
+
+    void hydrateFromCache();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [loadCachedOverview]);
+
+  const loadInstances = useCallback(
+    async (reason: RefreshReason) => {
+      const apiBaseUrl = await hydrateApiBaseUrl();
+      const hasExistingInstances = hasInstancesRef.current;
+      const endpointChanged =
+        Boolean(activeApiBaseUrlRef.current) &&
+        activeApiBaseUrlRef.current !== apiBaseUrl;
+      let loadedCachedOverview = false;
+
+      setActiveApiBaseUrl(apiBaseUrl);
+      setErrorMessage(null);
+      if (endpointChanged) {
+        loadedCachedOverview = await loadCachedOverview(apiBaseUrl);
+        if (!loadedCachedOverview) {
+          setInstances([]);
+          setLastUpdatedAt(null);
+          setIsUsingCachedData(false);
+        }
+      }
+      if (hasExistingInstances) {
+        setIsRefreshing(true);
+      } else {
+        setIsLoading(true);
+      }
+      setStatusMessage(
+        reason === "auto" && hasExistingInstances
+          ? `Auto-refreshing live metrics from ${apiBaseUrl}...`
+          : hasExistingInstances
+            ? `Refreshing live data from ${apiBaseUrl}...`
+            : `Connecting to ${apiBaseUrl}...`,
+      );
+
+      try {
+        const instancesResponse: MonitoringResponse =
+          await fetchMonitoringOverview();
+        hasLoadedLiveOverviewRef.current = true;
+        const liveInstances = instancesResponse.instances ?? [];
+        setInstances(liveInstances);
+        setIsUsingCachedData(false);
+        setLastUpdatedAt(
+          instancesResponse.timestamp ?? new Date().toISOString(),
+        );
+        setErrorMessage(null);
+        await cacheMonitoringOverview(apiBaseUrl, instancesResponse);
+
+        if (liveInstances.length) {
+          setStatusMessage(
+            `Live data connected to ${apiBaseUrl}. Auto-refresh runs every 30 seconds while this screen is open.`,
+          );
+
+          // Warm local history in the background so the detail screen can open fast.
+          void Promise.allSettled(
+            liveInstances.map((instance) => warmMonitoringHistory(instance)),
+          );
+        } else {
+          setStatusMessage(
+            `Connected to ${apiBaseUrl}. The screen will keep checking every 30 seconds, but no running instances were returned.`,
+          );
+        }
+      } catch {
+        const nextErrorMessage = `Could not reach ${apiBaseUrl}. Open Settings to update the API URL and try again.`;
+        setErrorMessage(nextErrorMessage);
+        setStatusMessage(
+          hasExistingInstances
+            ? loadedCachedOverview || isUsingCachedData
+              ? `Could not refresh ${apiBaseUrl}. Showing cached metrics from the device.`
+              : `Could not refresh ${apiBaseUrl}. Showing the last successful instance list.`
+            : nextErrorMessage,
+        );
+      } finally {
+        setIsLoading(false);
+        setIsRefreshing(false);
+      }
+    },
+    [isUsingCachedData, loadCachedOverview],
+  );
   const { isAutoRefreshing, runRefresh } = useAutoRefresh({
     intervalMs: POLL_INTERVAL_MS,
     onRefresh: loadInstances,
@@ -178,7 +267,9 @@ export default function InstancesScreen() {
                   errorMessage && styles.liveBadgeTextError,
                 ]}
               >
-                Refreshes every 30s
+                {isUsingCachedData
+                  ? "Using cached data"
+                  : "Refreshes every 30s"}
               </Text>
             </View>
             <Text

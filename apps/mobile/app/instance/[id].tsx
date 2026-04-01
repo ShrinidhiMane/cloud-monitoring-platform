@@ -14,6 +14,11 @@ import {
 } from "@/components/TimeRangeSelector";
 import { hydrateApiBaseUrl } from "@/services/apiBaseUrl";
 import {
+  cacheMonitoringInstance,
+  readCachedMonitoringInstance,
+  readCachedOverviewInstance,
+} from "@/services/monitoringCache";
+import {
   cacheMonitoringHistorySnapshot,
   readCachedCpuHistorySnapshot,
   type CachedCpuHistorySnapshot,
@@ -175,6 +180,7 @@ export default function InstanceDetailScreen() {
   const [monitoring, setMonitoring] = useState<MonitoringInstance | null>(null);
   const [isLoadingMetrics, setIsLoadingMetrics] = useState(true);
   const [metricsError, setMetricsError] = useState<string | null>(null);
+  const [isUsingCachedMetrics, setIsUsingCachedMetrics] = useState(false);
   const [historySnapshot, setHistorySnapshot] =
     useState<CachedCpuHistorySnapshot>(EMPTY_HISTORY_SNAPSHOT);
   const [apiBaseUrl, setCurrentApiBaseUrl] = useState("");
@@ -199,11 +205,48 @@ export default function InstanceDetailScreen() {
     router.push(SETTINGS_ROUTE);
   }, [router]);
 
+  const loadCachedMonitoring = useCallback(
+    async (configuredApiBaseUrl: string) => {
+      if (!instanceId) {
+        return null;
+      }
+
+      const cachedInstanceRecord = await readCachedMonitoringInstance(
+        configuredApiBaseUrl,
+        instanceId,
+        remoteRange,
+      );
+      if (cachedInstanceRecord) {
+        return {
+          monitoring: cachedInstanceRecord.monitoring,
+          cachedAt:
+            cachedInstanceRecord.cachedAt ??
+            cachedInstanceRecord.monitoring.updatedAt,
+        };
+      }
+
+      const cachedOverviewInstance = await readCachedOverviewInstance(
+        configuredApiBaseUrl,
+        instanceId,
+      );
+      if (!cachedOverviewInstance) {
+        return null;
+      }
+
+      return {
+        monitoring: cachedOverviewInstance,
+        cachedAt: cachedOverviewInstance.updatedAt,
+      };
+    },
+    [instanceId, remoteRange],
+  );
+
   const loadMetrics = useCallback(
     async (_reason: RefreshReason) => {
       if (!instanceId) {
         setMetricsError("This route is missing an instance id.");
         setMonitoring(null);
+        setIsUsingCachedMetrics(false);
         setHistorySnapshot(EMPTY_HISTORY_SNAPSHOT);
         setLastRefreshedAt(null);
         setIsLoadingMetrics(false);
@@ -218,20 +261,26 @@ export default function InstanceDetailScreen() {
         activeApiBaseUrl = await hydrateApiBaseUrl();
         setCurrentApiBaseUrl(activeApiBaseUrl);
         const result = await fetchInstanceMonitoring(instanceId, remoteRange);
-        setLastRefreshedAt(new Date().toISOString());
 
         if (!result) {
-          const cachedSnapshot = await readCachedCpuHistorySnapshot(
-            instanceId,
-            timeRange,
-            MAX_CHART_POINTS,
-          );
+          const [cachedSnapshot, cachedMonitoring] = await Promise.all([
+            readCachedCpuHistorySnapshot(
+              instanceId,
+              timeRange,
+              MAX_CHART_POINTS,
+            ),
+            loadCachedMonitoring(activeApiBaseUrl),
+          ]);
 
-          setMonitoring(null);
+          setMonitoring((current) => cachedMonitoring?.monitoring ?? current);
+          setIsUsingCachedMetrics(Boolean(cachedMonitoring));
+          setLastRefreshedAt(
+            (current) => cachedMonitoring?.cachedAt ?? current,
+          );
           setHistorySnapshot(cachedSnapshot);
           setMetricsError(
-            cachedSnapshot.sampleCount
-              ? `No live snapshot was returned for ${instanceId}. Showing saved history.`
+            cachedMonitoring || cachedSnapshot.sampleCount
+              ? `No live snapshot was returned for ${instanceId}. Showing cached metrics from this device.`
               : `No live snapshot was returned for ${instanceId}.`,
           );
           return;
@@ -242,33 +291,39 @@ export default function InstanceDetailScreen() {
           timeRange,
           MAX_CHART_POINTS,
         );
+        await cacheMonitoringInstance(activeApiBaseUrl, result, remoteRange);
 
         setMonitoring(result);
+        setIsUsingCachedMetrics(false);
         setHistorySnapshot(nextHistorySnapshot);
+        setLastRefreshedAt(new Date().toISOString());
       } catch {
-        const cachedSnapshot = await readCachedCpuHistorySnapshot(
-          instanceId,
-          timeRange,
-          MAX_CHART_POINTS,
-        );
+        const [cachedSnapshot, cachedMonitoring] = await Promise.all([
+          readCachedCpuHistorySnapshot(instanceId, timeRange, MAX_CHART_POINTS),
+          loadCachedMonitoring(activeApiBaseUrl),
+        ]);
 
+        setMonitoring((current) => cachedMonitoring?.monitoring ?? current);
+        setIsUsingCachedMetrics(Boolean(cachedMonitoring));
+        setLastRefreshedAt((current) => cachedMonitoring?.cachedAt ?? current);
         setHistorySnapshot(cachedSnapshot);
         setMetricsError(
-          cachedSnapshot.sampleCount
-            ? `Could not refresh ${instanceId}. Showing saved history.`
+          cachedMonitoring || cachedSnapshot.sampleCount
+            ? `Could not refresh ${instanceId}. Showing cached metrics from this device.`
             : `CloudWatch unavailable at ${activeApiBaseUrl || "the configured endpoint"}.`,
         );
       } finally {
         setIsLoadingMetrics(false);
       }
     },
-    [instanceId, remoteRange, timeRange],
+    [instanceId, loadCachedMonitoring, remoteRange, timeRange],
   );
 
   useEffect(() => {
     if (!instanceId) {
       setMetricsError("This route is missing an instance id.");
       setMonitoring(null);
+      setIsUsingCachedMetrics(false);
       setHistorySnapshot(EMPTY_HISTORY_SNAPSHOT);
       setLastRefreshedAt(null);
       setIsLoadingMetrics(false);
@@ -278,16 +333,26 @@ export default function InstanceDetailScreen() {
     let isMounted = true;
 
     const loadCachedHistory = async () => {
-      const cachedSnapshot = await readCachedCpuHistorySnapshot(
-        instanceId,
-        timeRange,
-        MAX_CHART_POINTS,
-      );
+      const configuredApiBaseUrl = await hydrateApiBaseUrl();
+      const [cachedSnapshot, cachedMonitoring] = await Promise.all([
+        readCachedCpuHistorySnapshot(instanceId, timeRange, MAX_CHART_POINTS),
+        loadCachedMonitoring(configuredApiBaseUrl),
+      ]);
       if (!isMounted) {
         return;
       }
 
+      setCurrentApiBaseUrl(configuredApiBaseUrl);
       setHistorySnapshot(cachedSnapshot);
+      if (cachedMonitoring) {
+        setMonitoring(cachedMonitoring.monitoring);
+        setIsUsingCachedMetrics(true);
+        setLastRefreshedAt(cachedMonitoring.cachedAt);
+      } else {
+        setMonitoring(null);
+        setIsUsingCachedMetrics(false);
+        setLastRefreshedAt(null);
+      }
     };
 
     void loadCachedHistory();
@@ -295,7 +360,7 @@ export default function InstanceDetailScreen() {
     return () => {
       isMounted = false;
     };
-  }, [instanceId, timeRange]);
+  }, [instanceId, loadCachedMonitoring, timeRange]);
 
   const { isAutoRefreshing, runRefresh } = useAutoRefresh({
     enabled: Boolean(instanceId),
@@ -470,18 +535,20 @@ export default function InstanceDetailScreen() {
                 styles.liveRefreshDot,
                 (isLoadingMetrics || isAutoRefreshing) &&
                   styles.liveRefreshDotActive,
-                metricsError && !hasLiveMetrics && styles.liveRefreshDotError,
+                (metricsError || isUsingCachedMetrics) &&
+                  styles.liveRefreshDotError,
               ]}
             />
             <Text
               style={[
                 styles.liveRefreshBadgeText,
-                metricsError &&
-                  !hasLiveMetrics &&
+                (metricsError || isUsingCachedMetrics) &&
                   styles.liveRefreshBadgeTextError,
               ]}
             >
-              Auto-refresh every 30s
+              {isUsingCachedMetrics
+                ? "Showing cached metrics"
+                : "Auto-refresh every 30s"}
             </Text>
           </View>
           <Text style={styles.liveRefreshMeta}>
@@ -576,9 +643,11 @@ export default function InstanceDetailScreen() {
                   <Text style={styles.endpointText}>API: {apiBaseUrl}</Text>
                 ) : null}
                 <Text style={styles.refreshText}>
-                  {isAutoRefreshing
-                    ? "Auto-refreshing live metrics now…"
-                    : "Live metrics refresh automatically every 30 seconds while this screen is open."}
+                  {isUsingCachedMetrics
+                    ? "The latest visible snapshot is being loaded from saved on-device metrics."
+                    : isAutoRefreshing
+                      ? "Auto-refreshing live metrics now…"
+                      : "Live metrics refresh automatically every 30 seconds while this screen is open."}
                 </Text>
               </View>
               <View style={styles.chartStats}>
