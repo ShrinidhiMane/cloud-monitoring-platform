@@ -130,7 +130,12 @@ export const createApp = (clients = createAwsClients()) => {
         () =>
           ec2
             .describeInstances({
-              Filters: [{ Name: "instance-state-name", Values: ["running"] }],
+              Filters: [
+  {
+    Name: "instance-state-name",
+    Values: ["pending", "running", "stopping", "stopped"],
+  },
+],
             })
             .promise(),
         { Reservations: [] },
@@ -383,11 +388,19 @@ export const createApp = (clients = createAwsClients()) => {
         { SecurityGroups: [] },
       );
 
+let overallStatus = "healthy";
+
+if (!result.length) {
+  overallStatus = "unknown";
+} else if (result.some(inst => inst.state !== "running")) {
+  overallStatus = "degraded";
+}
       res.status(200).json({
-        timestamp: responseTimestamp,
-        region: AWS.config.region,
-        instances: result,
-        s3: s3Buckets,
+  timestamp: responseTimestamp,
+  region: AWS.config.region,
+  status: overallStatus,
+  instances: result,
+  s3: s3Buckets,
         security: (sgData.SecurityGroups || []).map((group) => ({
           groupId: group.GroupId,
           groupName: group.GroupName,
