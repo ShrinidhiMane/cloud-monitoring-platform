@@ -112,6 +112,18 @@ function getInstanceName(instance) {
   );
 }
 
+function getOverallHealthStatus(instances = []) {
+  if (!instances.length) {
+    return "unknown";
+  }
+
+  if (instances.some((inst) => inst.state !== "running")) {
+    return "degraded";
+  }
+
+  return "healthy";
+}
+
 export const createApp = (clients = createAwsClients()) => {
   const { ec2, cloudwatch, s3 } = clients;
   const app = express();
@@ -388,13 +400,8 @@ export const createApp = (clients = createAwsClients()) => {
         { SecurityGroups: [] },
       );
 
-let overallStatus = "healthy";
+const overallStatus = getOverallHealthStatus(result);
 
-if (!result.length) {
-  overallStatus = "unknown";
-} else if (result.some(inst => inst.state !== "running")) {
-  overallStatus = "degraded";
-}
       res.status(200).json({
   timestamp: responseTimestamp,
   region: AWS.config.region,
