@@ -1,3 +1,4 @@
+import { ScreenStateCard } from "@/components/ScreenStateCard";
 import { useFocusEffect } from "@react-navigation/native";
 import React, { useCallback, useState } from "react";
 import { useRouter } from "expo-router";
@@ -28,6 +29,7 @@ export default function SettingsScreen() {
     "Choose the monitoring API URL used for live EC2 data.",
   );
   const [isSaving, setIsSaving] = useState(false);
+  const [hasError, setHasError] = useState(false);
 
   const loadCurrentUrl = useCallback(async () => {
     const currentUrl = await getConfiguredApiBaseUrl();
@@ -43,11 +45,14 @@ export default function SettingsScreen() {
 
   const handleTest = useCallback(async () => {
     setIsSaving(true);
+    setHasError(false);
     const result = await testApiBaseUrl(apiBaseUrl);
 
     if (result.ok) {
+      setHasError(false);
       setStatusMessage(`Connected to ${result.normalizedUrl}.`);
     } else {
+      setHasError(true);
       setStatusMessage(`Connection failed: ${result.error}`);
     }
 
@@ -175,10 +180,29 @@ export default function SettingsScreen() {
           </Pressable>
         </View>
 
-        <View style={styles.statusCard}>
-          <Text style={styles.statusLabel}>Status</Text>
-          <Text style={styles.statusText}>{statusMessage}</Text>
-        </View>
+        {statusMessage ? (
+          <ScreenStateCard
+            variant={hasError ? "error" : "empty"}
+            title={hasError ? "Connection Failed" : "Status"}
+            message={statusMessage}
+            actions={
+              hasError
+                ? [
+                    {
+                      label: "Retry",
+                      onPress: () => { void handleTest(); },
+                      tone: "primary",
+                    },
+                    {
+                      label: "Reset to Default",
+                      onPress: () => { void handleReset(); },
+                    },
+                  ]
+                : undefined
+            }
+          />
+        ) : null}
+
       </ScrollView>
     </SafeAreaView>
   );
@@ -261,25 +285,5 @@ const styles = StyleSheet.create({
   },
   buttonDisabled: {
     opacity: 0.6,
-  },
-  statusCard: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: "#E2E8F0",
-    gap: 8,
-  },
-  statusLabel: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: "#0F172A",
-    textTransform: "uppercase",
-    letterSpacing: 0.6,
-  },
-  statusText: {
-    fontSize: 14,
-    color: "#334155",
-    lineHeight: 20,
   },
 });
