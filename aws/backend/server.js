@@ -4,8 +4,15 @@ import AWS from "aws-sdk";
 
 AWS.config.update({ region: "us-east-2" });
 
-const POWER_ACTIONS = new Set(["start", "stop"]);
+const POWER_ACTIONS = new Set(["start", "stop", "reboot"]);
 const DEFAULT_RANGE = "1h";
+
+const ALLOWED_INSTANCE_IDS = new Set(
+  (process.env.AWS_ALLOWED_INSTANCE_IDS || "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean),
+);
 
 const RANGE_CONFIG = {
   "15m": {
@@ -69,9 +76,7 @@ function roundMetricValue(value) {
 
 function sortDatapoints(datapoints = []) {
   return [...datapoints].sort((left, right) => {
-    return (
-      new Date(left.Timestamp).getTime() - new Date(right.Timestamp).getTime()
-    );
+    return new Date(left.Timestamp).getTime() - new Date(right.Timestamp).getTime();
   });
 }
 
@@ -124,6 +129,14 @@ function getOverallHealthStatus(instances = []) {
   return "healthy";
 }
 
+function isInstanceAllowed(instanceId) {
+  if (!ALLOWED_INSTANCE_IDS.size) {
+    return false;
+  }
+
+  return ALLOWED_INSTANCE_IDS.has(instanceId);
+}
+
 export const createApp = (clients = createAwsClients()) => {
   const { ec2, cloudwatch, s3 } = clients;
   const app = express();
@@ -143,11 +156,11 @@ export const createApp = (clients = createAwsClients()) => {
           ec2
             .describeInstances({
               Filters: [
-  {
-    Name: "instance-state-name",
-    Values: ["pending", "running", "stopping", "stopped"],
-  },
-],
+                {
+                  Name: "instance-state-name",
+                  Values: ["pending", "running", "stopping", "stopped"],
+                },
+              ],
             })
             .promise(),
         { Reservations: [] },
@@ -400,14 +413,14 @@ export const createApp = (clients = createAwsClients()) => {
         { SecurityGroups: [] },
       );
 
-const overallStatus = getOverallHealthStatus(result);
+      const overallStatus = getOverallHealthStatus(result);
 
       res.status(200).json({
-  timestamp: responseTimestamp,
-  region: AWS.config.region,
-  status: overallStatus,
-  instances: result,
-  s3: s3Buckets,
+        timestamp: responseTimestamp,
+        region: AWS.config.region,
+        status: overallStatus,
+        instances: result,
+        s3: s3Buckets,
         security: (sgData.SecurityGroups || []).map((group) => ({
           groupId: group.GroupId,
           groupName: group.GroupName,
@@ -431,14 +444,48 @@ const overallStatus = getOverallHealthStatus(result);
         });
       }
 
+      if (!ALLOWED_INSTANCE_IDS.size) {
+        return res.status(500).json({
+          error: "ConfigurationError",
+          message: "AWS_ALLOWED_INSTANCE_IDS is not configured",
+        });
+      }
+
+      if (!isInstanceAllowed(instanceId)) {
+        return res.status(403).json({
+          error: "AccessDenied",
+          message: `Instance '${instanceId}' is not in the allow-list`,
+        });
+      }
+
       if (!POWER_ACTIONS.has(action)) {
         return res.status(400).json({
           error: "ValidationError",
-          message: "Body field 'action' must be either 'start' or 'stop'",
+          message:
+            "Body field 'action' must be either 'start', 'stop', or 'reboot'",
         });
       }
 
       const request = { InstanceIds: [instanceId] };
+
+      if (action === "reboot") {
+        const describeResponse = await ec2.describeInstances(request).promise();
+        const reservation = describeResponse.Reservations?.[0];
+        const instance = reservation?.Instances?.[0];
+        const currentState = instance?.State?.Name || null;
+
+        const response = await ec2.rebootInstances(request).promise();
+
+        return res.status(200).json({
+          instanceId,
+          action,
+          status: "accepted",
+          previousState: currentState,
+          currentState,
+          requestId: response.$response?.requestId || null,
+        });
+      }
+
       const response =
         action === "start"
           ? await ec2.startInstances(request).promise()
@@ -491,11 +538,11 @@ const overallStatus = getOverallHealthStatus(result);
   return app;
 };
 
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 
 if (process.env.NODE_ENV !== "test") {
   const app = createApp();
-  app.listen(PORT, "127.0.0.1", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server running on http://0.0.0.0:${PORT}`);
   });
 }
