@@ -301,11 +301,12 @@ export default function InstancesScreen() {
       return (
         <ScreenStateCard
           variant="error"
-          title="Couldn’t load instances"
+          title="Couldn't load instances"
           message={errorMessage}
           actions={[
             { label: "Try Again", onPress: handleRetry, tone: "primary" },
             { label: "Open Settings", onPress: handleOpenSettings },
+            { label: "Dismiss", onPress: () => setErrorMessage(null) },
           ]}
         />
       );
