@@ -1,6 +1,9 @@
-import React, { useEffect, useState } from "react";
+import { useFocusEffect } from "@react-navigation/native";
+import { useRouter } from "expo-router";
+import React, { useCallback, useState } from "react";
 import {
   Pressable,
+  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -9,6 +12,8 @@ import {
 } from "react-native";
 
 import { StatusBanner } from "@/components/StatusBanner";
+import { TABS_ROOT_ROUTE } from "@/navigation/routes";
+import { normalizeApiBaseUrl, saveApiBaseUrl } from "@/services/apiBaseUrl";
 import { API_URL } from "@/services/apiClient";
 import {
   deleteAwsSetupProfile,
@@ -20,30 +25,31 @@ import {
 } from "@/services/awsSetupStorage";
 
 interface SetupFormState {
-  label: string;
-  region: string;
-  backendUrl: string;
   accessKeyId: string;
-  secretAccessKey: string;
-  sessionToken: string;
+  backendUrl: string;
   instanceId: string;
   instanceName: string;
+  label: string;
   notes: string;
+  region: string;
+  secretAccessKey: string;
+  sessionToken: string;
 }
 
 const DEFAULT_FORM: SetupFormState = {
-  label: "",
-  region: "us-east-2",
-  backendUrl: API_URL.replace(/\/+$/, ""),
   accessKeyId: "",
-  secretAccessKey: "",
-  sessionToken: "",
+  backendUrl: normalizeApiBaseUrl(API_URL),
   instanceId: "",
   instanceName: "",
+  label: "",
   notes: "",
+  region: "",
+  secretAccessKey: "",
+  sessionToken: "",
 };
 
 export default function AwsSetupScreen() {
+  const router = useRouter();
   const [form, setForm] = useState<SetupFormState>(DEFAULT_FORM);
   const [profiles, setProfiles] = useState<AwsSetupProfile[]>([]);
   const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
@@ -51,11 +57,7 @@ export default function AwsSetupScreen() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
-  useEffect(() => {
-    void refreshProfiles();
-  }, []);
-
-  async function refreshProfiles() {
+  const refreshProfiles = useCallback(async () => {
     const [savedProfiles, activeProfile] = await Promise.all([
       listAwsSetupProfiles(),
       getActiveAwsSetup(),
@@ -63,21 +65,19 @@ export default function AwsSetupScreen() {
 
     setProfiles(savedProfiles);
     setActiveProfileId(activeProfile?.id ?? null);
-  }
+  }, []);
 
-  async function handleSave() {
-    const missingRequiredField =
-      !form.label.trim() ||
-      !form.region.trim() ||
-      !form.backendUrl.trim() ||
-      !form.accessKeyId.trim() ||
-      !form.secretAccessKey.trim() ||
-      !form.instanceId.trim();
+  useFocusEffect(
+    useCallback(() => {
+      void refreshProfiles();
+    }, [refreshProfiles]),
+  );
 
-    if (missingRequiredField) {
-      setErrorMessage(
-        "Fill in the setup name, region, backend URL, credentials, and instance id before saving.",
-      );
+  const isOnboarding = !profiles.length && !activeProfileId;
+
+  const handleSave = useCallback(async () => {
+    if (!form.backendUrl.trim()) {
+      setErrorMessage("Enter a monitoring URL before saving this connection.");
       setStatusMessage(null);
       return;
     }
@@ -86,268 +86,380 @@ export default function AwsSetupScreen() {
     setErrorMessage(null);
 
     try {
+      const normalizedBackendUrl = normalizeApiBaseUrl(form.backendUrl);
       const savedProfile = await saveAwsSetupProfile({
-        label: form.label,
-        region: form.region,
-        backendUrl: form.backendUrl,
         accessKeyId: form.accessKeyId,
-        secretAccessKey: form.secretAccessKey,
-        sessionToken: form.sessionToken,
+        backendUrl: normalizedBackendUrl,
         instanceId: form.instanceId,
         instanceName: form.instanceName,
+        label: form.label,
         notes: form.notes,
+        region: form.region,
+        secretAccessKey: form.secretAccessKey,
+        sessionToken: form.sessionToken,
       });
 
-      setForm(DEFAULT_FORM);
-      setStatusMessage(`Saved setup for ${savedProfile.label}.`);
+      await saveApiBaseUrl(savedProfile.backendUrl);
+      setForm({
+        ...DEFAULT_FORM,
+        backendUrl: normalizedBackendUrl,
+      });
+      setStatusMessage(`Saved ${savedProfile.label} on this device.`);
       await refreshProfiles();
+
+      if (isOnboarding) {
+        router.replace(TABS_ROOT_ROUTE);
+      }
     } catch {
-      setErrorMessage("Unable to save this AWS setup on the device.");
+      setErrorMessage("Unable to save this monitoring connection on the device.");
       setStatusMessage(null);
     } finally {
       setIsSaving(false);
     }
-  }
+  }, [form, isOnboarding, refreshProfiles, router]);
 
-  async function handleUseProfile(id: string) {
-    await setActiveAwsSetup(id);
-    setStatusMessage("Active AWS setup updated.");
-    setErrorMessage(null);
-    await refreshProfiles();
-  }
+  const handleUseProfile = useCallback(
+    async (id: string) => {
+      const selectedProfile = profiles.find((profile) => profile.id === id);
+      if (!selectedProfile) {
+        return;
+      }
 
-  async function handleDeleteProfile(id: string) {
-    await deleteAwsSetupProfile(id);
-    setStatusMessage("Saved AWS setup removed.");
-    setErrorMessage(null);
-    await refreshProfiles();
-  }
+      const shouldFinishOnboarding = !activeProfileId;
+
+      await Promise.all([
+        setActiveAwsSetup(id),
+        saveApiBaseUrl(selectedProfile.backendUrl),
+      ]);
+
+      setStatusMessage(`${selectedProfile.label} is now the active connection.`);
+      setErrorMessage(null);
+      await refreshProfiles();
+
+      if (shouldFinishOnboarding) {
+        router.replace(TABS_ROOT_ROUTE);
+      }
+    },
+    [activeProfileId, profiles, refreshProfiles, router],
+  );
+
+  const handleDeleteProfile = useCallback(
+    async (id: string) => {
+      await deleteAwsSetupProfile(id);
+      const nextActiveProfile = await getActiveAwsSetup();
+
+      if (nextActiveProfile?.backendUrl) {
+        await saveApiBaseUrl(nextActiveProfile.backendUrl);
+      }
+
+      setStatusMessage("Saved monitoring connection removed.");
+      setErrorMessage(null);
+      await refreshProfiles();
+    },
+    [refreshProfiles],
+  );
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <View style={styles.hero}>
-        <Text style={styles.eyebrow}>Setup</Text>
-        <Text style={styles.title}>AWS Instance Configuration</Text>
-        <Text style={styles.subtitle}>
-          Save the connection details, backend URL, and credentials you expect
-          to use once the live AWS flow is wired end to end.
-        </Text>
-      </View>
+    <SafeAreaView style={styles.safeArea}>
+      <ScrollView contentContainerStyle={styles.content}>
+        <View style={styles.hero}>
+          {isOnboarding ? (
+            <View style={styles.stepBadge}>
+              <Text style={styles.stepBadgeText}>Step 3 of 3</Text>
+            </View>
+          ) : null}
 
-      <StatusBanner
-        title="Local only"
-        message="These values are stored on this device. The backend still needs matching AWS credentials configured separately before live calls will succeed."
-      />
-
-      {statusMessage && (
-        <View style={styles.successBanner}>
-          <Text style={styles.successText}>{statusMessage}</Text>
-        </View>
-      )}
-
-      {errorMessage && (
-        <View style={styles.errorBanner}>
-          <Text style={styles.errorText}>{errorMessage}</Text>
-        </View>
-      )}
-
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>Add AWS Setup</Text>
-        <View style={styles.fieldGrid}>
-          <FormField
-            label="Setup name"
-            placeholder="Dev account"
-            value={form.label}
-            onChangeText={(value) =>
-              setForm((current) => ({ ...current, label: value }))
-            }
-          />
-          <FormField
-            label="Region"
-            placeholder="us-east-2"
-            value={form.region}
-            onChangeText={(value) =>
-              setForm((current) => ({ ...current, region: value }))
-            }
-          />
-          <FormField
-            label="Backend URL"
-            placeholder="http://192.168.x.x:4000"
-            keyboardType="url"
-            autoCapitalize="none"
-            value={form.backendUrl}
-            onChangeText={(value) =>
-              setForm((current) => ({ ...current, backendUrl: value }))
-            }
-          />
-          <FormField
-            label="Access key ID"
-            autoCapitalize="characters"
-            value={form.accessKeyId}
-            onChangeText={(value) =>
-              setForm((current) => ({ ...current, accessKeyId: value }))
-            }
-          />
-          <FormField
-            label="Secret access key"
-            secureTextEntry
-            autoCapitalize="none"
-            value={form.secretAccessKey}
-            onChangeText={(value) =>
-              setForm((current) => ({ ...current, secretAccessKey: value }))
-            }
-          />
-          <FormField
-            label="Session token"
-            secureTextEntry
-            autoCapitalize="none"
-            value={form.sessionToken}
-            onChangeText={(value) =>
-              setForm((current) => ({ ...current, sessionToken: value }))
-            }
-          />
-          <FormField
-            label="Instance ID"
-            autoCapitalize="none"
-            value={form.instanceId}
-            onChangeText={(value) =>
-              setForm((current) => ({ ...current, instanceId: value }))
-            }
-          />
-          <FormField
-            label="Instance name"
-            value={form.instanceName}
-            onChangeText={(value) =>
-              setForm((current) => ({ ...current, instanceName: value }))
-            }
-          />
-          <FormField
-            label="Notes"
-            placeholder="Role, environment, or account notes"
-            multiline
-            value={form.notes}
-            onChangeText={(value) =>
-              setForm((current) => ({ ...current, notes: value }))
-            }
-          />
-        </View>
-
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => void handleSave()}
-          style={({ pressed }) => [
-            styles.primaryButton,
-            pressed && styles.primaryButtonPressed,
-            isSaving && styles.primaryButtonDisabled,
-          ]}
-        >
-          <Text style={styles.primaryButtonText}>
-            {isSaving ? "Saving…" : "Save setup"}
+          <Text style={styles.eyebrow}>
+            {isOnboarding ? "Connection" : "Saved connections"}
           </Text>
-        </Pressable>
-      </View>
-
-      <View style={styles.card}>
-        <View style={styles.savedHeader}>
-          <Text style={styles.cardTitle}>Saved Setups</Text>
-          <Text style={styles.savedCount}>{profiles.length}</Text>
+          <Text style={styles.title}>
+            {isOnboarding
+              ? "Connect your monitoring endpoint"
+              : "AWS Monitoring Connections"}
+          </Text>
+          <Text style={styles.subtitle}>
+            {isOnboarding
+              ? "Finish setup by saving the monitoring URL this device should use. Instance ids, region, and credentials are optional."
+              : "Manage the monitoring endpoints this device can use. Only the monitoring URL is required for a saved connection."}
+          </Text>
         </View>
 
-        {!profiles.length ? (
-          <Text style={styles.emptyText}>
-            No AWS setups saved yet. Add one above so the app has the instance
-            and credential details you plan to use.
-          </Text>
-        ) : (
-          profiles.map((profile) => {
-            const isActive = profile.id === activeProfileId;
+        <StatusBanner
+          title={isOnboarding ? "Required to finish setup" : "Stored on device"}
+          message={
+            isOnboarding
+              ? "The app needs one monitoring URL before the Instances tab can load live data."
+              : "Monitoring URLs, optional AWS credentials, and any saved instance notes remain on this device only."
+          }
+        />
 
-            return (
-              <View key={profile.id} style={styles.profileCard}>
-                <View style={styles.profileHeader}>
-                  <View style={styles.profileCopy}>
-                    <Text style={styles.profileLabel}>{profile.label}</Text>
-                    <Text style={styles.profileMeta}>
-                      {profile.region} · {profile.instanceId}
-                    </Text>
-                    <Text style={styles.profileMeta}>
-                      Backend: {profile.backendUrl}
-                    </Text>
-                  </View>
-                  {isActive && (
-                    <View style={styles.activeBadge}>
-                      <Text style={styles.activeBadgeText}>Active</Text>
+        <View style={styles.requirementsCard}>
+          <Text style={styles.requirementsTitle}>Connection requirements</Text>
+          <Text style={styles.requirementsLine}>
+            Required: monitoring URL
+          </Text>
+          <Text style={styles.requirementsLine}>
+            Optional: setup name, region, instance id, instance name, access key,
+            secret key, session token, and notes
+          </Text>
+        </View>
+
+        {statusMessage ? (
+          <View style={styles.successBanner}>
+            <Text style={styles.successText}>{statusMessage}</Text>
+          </View>
+        ) : null}
+
+        {errorMessage ? (
+          <View style={styles.errorBanner}>
+            <Text style={styles.errorText}>{errorMessage}</Text>
+          </View>
+        ) : null}
+
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>
+            {isOnboarding ? "Add your first connection" : "Add another connection"}
+          </Text>
+
+          <View style={styles.fieldGrid}>
+            <FormField
+              autoCapitalize="none"
+              keyboardType="url"
+              label="Monitoring URL"
+              placeholder="http://192.168.x.x:5000/monitoring"
+              value={form.backendUrl}
+              onChangeText={(value) =>
+                setForm((current) => ({ ...current, backendUrl: value }))
+              }
+            />
+
+            <FormField
+              label="Setup name"
+              optional
+              placeholder="Production monitoring"
+              value={form.label}
+              onChangeText={(value) =>
+                setForm((current) => ({ ...current, label: value }))
+              }
+            />
+
+            <FormField
+              label="Region"
+              optional
+              placeholder="us-east-2"
+              value={form.region}
+              onChangeText={(value) =>
+                setForm((current) => ({ ...current, region: value }))
+              }
+            />
+
+            <FormField
+              autoCapitalize="none"
+              label="Instance ID"
+              optional
+              placeholder="i-0123456789abcdef0"
+              value={form.instanceId}
+              onChangeText={(value) =>
+                setForm((current) => ({ ...current, instanceId: value }))
+              }
+            />
+
+            <FormField
+              label="Instance name"
+              optional
+              placeholder="api-server-1"
+              value={form.instanceName}
+              onChangeText={(value) =>
+                setForm((current) => ({ ...current, instanceName: value }))
+              }
+            />
+
+            <FormField
+              autoCapitalize="characters"
+              label="Access key ID"
+              optional
+              value={form.accessKeyId}
+              onChangeText={(value) =>
+                setForm((current) => ({ ...current, accessKeyId: value }))
+              }
+            />
+
+            <FormField
+              autoCapitalize="none"
+              label="Secret access key"
+              optional
+              secureTextEntry
+              value={form.secretAccessKey}
+              onChangeText={(value) =>
+                setForm((current) => ({ ...current, secretAccessKey: value }))
+              }
+            />
+
+            <FormField
+              autoCapitalize="none"
+              label="Session token"
+              optional
+              secureTextEntry
+              value={form.sessionToken}
+              onChangeText={(value) =>
+                setForm((current) => ({ ...current, sessionToken: value }))
+              }
+            />
+
+            <FormField
+              label="Notes"
+              multiline
+              optional
+              placeholder="Team, environment, or account context"
+              value={form.notes}
+              onChangeText={(value) =>
+                setForm((current) => ({ ...current, notes: value }))
+              }
+            />
+          </View>
+
+          <Pressable
+            accessibilityRole="button"
+            disabled={isSaving}
+            onPress={() => {
+              void handleSave();
+            }}
+            style={({ pressed }) => [
+              styles.primaryButton,
+              pressed && styles.primaryButtonPressed,
+              isSaving && styles.primaryButtonDisabled,
+            ]}
+          >
+            <Text style={styles.primaryButtonText}>
+              {isSaving
+                ? "Saving..."
+                : isOnboarding
+                  ? "Save & Finish Setup"
+                  : "Save connection"}
+            </Text>
+          </Pressable>
+        </View>
+
+        <View style={styles.card}>
+          <View style={styles.savedHeader}>
+            <Text style={styles.cardTitle}>Saved connections</Text>
+            <Text style={styles.savedCount}>{profiles.length}</Text>
+          </View>
+
+          {!profiles.length ? (
+            <Text style={styles.emptyText}>
+              No monitoring connections are saved yet. Add a monitoring URL above
+              to give the app a default live endpoint.
+            </Text>
+          ) : (
+            profiles.map((profile) => {
+              const isActive = profile.id === activeProfileId;
+              const summary = formatConnectionSummary(profile);
+
+              return (
+                <View key={profile.id} style={styles.profileCard}>
+                  <View style={styles.profileHeader}>
+                    <View style={styles.profileCopy}>
+                      <Text style={styles.profileLabel}>{profile.label}</Text>
+                      <Text style={styles.profileMeta}>{summary}</Text>
+                      <Text style={styles.profileMeta}>
+                        Monitoring URL: {profile.backendUrl}
+                      </Text>
                     </View>
-                  )}
-                </View>
 
-                <View style={styles.profileBody}>
-                  <Text style={styles.profileLine}>
-                    Access key: {maskSecret(profile.accessKeyId)}
-                  </Text>
-                  <Text style={styles.profileLine}>
-                    Secret key: {maskSecret(profile.secretAccessKey)}
-                  </Text>
-                  {profile.sessionToken && (
-                    <Text style={styles.profileLine}>
-                      Session token: {maskSecret(profile.sessionToken)}
-                    </Text>
-                  )}
-                  {profile.instanceName ? (
-                    <Text style={styles.profileLine}>
-                      Instance name: {profile.instanceName}
-                    </Text>
-                  ) : null}
-                  {profile.notes ? (
-                    <Text style={styles.profileLine}>
-                      Notes: {profile.notes}
-                    </Text>
-                  ) : null}
-                </View>
+                    {isActive ? (
+                      <View style={styles.activeBadge}>
+                        <Text style={styles.activeBadgeText}>Active</Text>
+                      </View>
+                    ) : null}
+                  </View>
 
-                <View style={styles.actionsRow}>
-                  <Pressable
-                    accessibilityRole="button"
-                    onPress={() => void handleUseProfile(profile.id)}
-                    style={({ pressed }) => [
-                      styles.secondaryButton,
-                      pressed && styles.secondaryButtonPressed,
-                    ]}
-                  >
-                    <Text style={styles.secondaryButtonText}>
-                      {isActive ? "In use" : "Use setup"}
-                    </Text>
-                  </Pressable>
-                  <Pressable
-                    accessibilityRole="button"
-                    onPress={() => void handleDeleteProfile(profile.id)}
-                    style={({ pressed }) => [
-                      styles.deleteButton,
-                      pressed && styles.deleteButtonPressed,
-                    ]}
-                  >
-                    <Text style={styles.deleteButtonText}>Delete</Text>
-                  </Pressable>
+                  <View style={styles.profileBody}>
+                    {profile.accessKeyId ? (
+                      <Text style={styles.profileLine}>
+                        Access key: {maskSecret(profile.accessKeyId)}
+                      </Text>
+                    ) : null}
+
+                    {profile.secretAccessKey ? (
+                      <Text style={styles.profileLine}>
+                        Secret key: {maskSecret(profile.secretAccessKey)}
+                      </Text>
+                    ) : null}
+
+                    {profile.sessionToken ? (
+                      <Text style={styles.profileLine}>
+                        Session token: {maskSecret(profile.sessionToken)}
+                      </Text>
+                    ) : null}
+
+                    {profile.instanceName ? (
+                      <Text style={styles.profileLine}>
+                        Instance name: {profile.instanceName}
+                      </Text>
+                    ) : null}
+
+                    {profile.notes ? (
+                      <Text style={styles.profileLine}>
+                        Notes: {profile.notes}
+                      </Text>
+                    ) : null}
+                  </View>
+
+                  <View style={styles.actionsRow}>
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={() => {
+                        void handleUseProfile(profile.id);
+                      }}
+                      style={({ pressed }) => [
+                        styles.secondaryButton,
+                        pressed && styles.secondaryButtonPressed,
+                      ]}
+                    >
+                      <Text style={styles.secondaryButtonText}>
+                        {isActive ? "In Use" : "Use Connection"}
+                      </Text>
+                    </Pressable>
+
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={() => {
+                        void handleDeleteProfile(profile.id);
+                      }}
+                      style={({ pressed }) => [
+                        styles.deleteButton,
+                        pressed && styles.deleteButtonPressed,
+                      ]}
+                    >
+                      <Text style={styles.deleteButtonText}>Delete</Text>
+                    </Pressable>
+                  </View>
                 </View>
-              </View>
-            );
-          })
-        )}
-      </View>
-    </ScrollView>
+              );
+            })
+          )}
+        </View>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
 function FormField({
   label,
   multiline = false,
+  optional = false,
   ...props
 }: React.ComponentProps<typeof TextInput> & {
   label: string;
+  optional?: boolean;
 }) {
   return (
     <View style={styles.field}>
-      <Text style={styles.fieldLabel}>{label}</Text>
+      <Text style={styles.fieldLabel}>
+        {label}
+        {optional ? " (optional)" : ""}
+      </Text>
       <TextInput
         {...props}
         multiline={multiline}
@@ -356,6 +468,18 @@ function FormField({
       />
     </View>
   );
+}
+
+function formatConnectionSummary(profile: AwsSetupProfile): string {
+  const parts = [profile.region, profile.instanceId].filter(
+    (value) => value.trim().length > 0,
+  );
+
+  if (!parts.length) {
+    return "Monitoring URL only";
+  }
+
+  return parts.join(" • ");
 }
 
 function maskSecret(value: string): string {
@@ -368,9 +492,9 @@ function maskSecret(value: string): string {
 }
 
 const styles = StyleSheet.create({
-  container: {
+  safeArea: {
     flex: 1,
-    backgroundColor: "#F8FAFC",
+    backgroundColor: "#F3F7FF",
   },
   content: {
     padding: 20,
@@ -378,6 +502,20 @@ const styles = StyleSheet.create({
   },
   hero: {
     gap: 8,
+  },
+  stepBadge: {
+    alignSelf: "flex-start",
+    borderRadius: 999,
+    backgroundColor: "#0F172A",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  stepBadgeText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#FFFFFF",
+    letterSpacing: 0.5,
+    textTransform: "uppercase",
   },
   eyebrow: {
     fontSize: 12,
@@ -387,17 +525,36 @@ const styles = StyleSheet.create({
     color: "#2563EB",
   },
   title: {
-    fontSize: 28,
+    fontSize: 30,
     fontWeight: "800",
     color: "#0F172A",
   },
   subtitle: {
     fontSize: 14,
-    lineHeight: 20,
+    lineHeight: 21,
+    color: "#475569",
+  },
+  requirementsCard: {
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#D9E4FF",
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    gap: 6,
+  },
+  requirementsTitle: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#0F172A",
+  },
+  requirementsLine: {
+    fontSize: 13,
+    lineHeight: 19,
     color: "#475569",
   },
   successBanner: {
-    borderRadius: 16,
+    borderRadius: 18,
     borderWidth: 1,
     borderColor: "#86EFAC",
     backgroundColor: "#F0FDF4",
@@ -409,7 +566,7 @@ const styles = StyleSheet.create({
     color: "#166534",
   },
   errorBanner: {
-    borderRadius: 16,
+    borderRadius: 18,
     borderWidth: 1,
     borderColor: "#FCA5A5",
     backgroundColor: "#FEF2F2",
@@ -418,19 +575,19 @@ const styles = StyleSheet.create({
   },
   errorText: {
     fontSize: 13,
-    color: "#B91C1C",
+    color: "#991B1B",
   },
   card: {
     backgroundColor: "#FFFFFF",
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: "#E2E8F0",
+    borderRadius: 24,
     padding: 18,
-    gap: 16,
+    borderWidth: 1,
+    borderColor: "#D9E4FF",
+    gap: 14,
   },
   cardTitle: {
-    fontSize: 20,
-    fontWeight: "700",
+    fontSize: 18,
+    fontWeight: "800",
     color: "#0F172A",
   },
   fieldGrid: {
@@ -447,33 +604,34 @@ const styles = StyleSheet.create({
     color: "#475569",
   },
   input: {
-    borderRadius: 14,
     borderWidth: 1,
     borderColor: "#CBD5E1",
-    backgroundColor: "#F8FAFC",
+    borderRadius: 16,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    fontSize: 15,
+    backgroundColor: "#FFFFFF",
     color: "#0F172A",
   },
   inputMultiline: {
-    minHeight: 100,
+    minHeight: 88,
     textAlignVertical: "top",
   },
   primaryButton: {
+    minHeight: 54,
+    borderRadius: 18,
     alignItems: "center",
-    borderRadius: 14,
+    justifyContent: "center",
     backgroundColor: "#0F172A",
-    paddingVertical: 14,
+    paddingHorizontal: 16,
   },
   primaryButtonPressed: {
     opacity: 0.92,
   },
   primaryButtonDisabled: {
-    opacity: 0.7,
+    opacity: 0.6,
   },
   primaryButtonText: {
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: "700",
     color: "#FFFFFF",
   },
@@ -483,33 +641,33 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   savedCount: {
-    minWidth: 32,
-    borderRadius: 999,
-    backgroundColor: "#E2E8F0",
+    minWidth: 34,
     paddingHorizontal: 10,
-    paddingVertical: 4,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: "#EEF4FF",
     textAlign: "center",
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: "700",
-    color: "#334155",
+    color: "#2563EB",
   },
   emptyText: {
     fontSize: 14,
-    lineHeight: 20,
+    lineHeight: 21,
     color: "#64748B",
   },
   profileCard: {
-    borderRadius: 18,
+    gap: 12,
+    borderRadius: 20,
     borderWidth: 1,
     borderColor: "#E2E8F0",
     backgroundColor: "#F8FAFC",
     padding: 16,
-    gap: 12,
   },
   profileHeader: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    gap: 12,
+    alignItems: "flex-start",
+    gap: 10,
   },
   profileCopy: {
     flex: 1,
@@ -517,33 +675,33 @@ const styles = StyleSheet.create({
   },
   profileLabel: {
     fontSize: 16,
-    fontWeight: "700",
+    fontWeight: "800",
     color: "#0F172A",
   },
   profileMeta: {
     fontSize: 13,
-    color: "#64748B",
+    lineHeight: 19,
+    color: "#475569",
   },
   activeBadge: {
-    alignSelf: "flex-start",
     borderRadius: 999,
-    backgroundColor: "#DBEAFE",
+    backgroundColor: "#DCFCE7",
     paddingHorizontal: 10,
     paddingVertical: 5,
   },
   activeBadgeText: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: "700",
-    letterSpacing: 0.5,
+    color: "#166534",
     textTransform: "uppercase",
-    color: "#1D4ED8",
+    letterSpacing: 0.4,
   },
   profileBody: {
-    gap: 4,
+    gap: 6,
   },
   profileLine: {
     fontSize: 13,
-    lineHeight: 18,
+    lineHeight: 19,
     color: "#334155",
   },
   actionsRow: {
@@ -552,15 +710,17 @@ const styles = StyleSheet.create({
   },
   secondaryButton: {
     flex: 1,
+    minHeight: 46,
+    borderRadius: 16,
     alignItems: "center",
-    borderRadius: 12,
+    justifyContent: "center",
+    backgroundColor: "#FFFFFF",
     borderWidth: 1,
     borderColor: "#CBD5E1",
-    backgroundColor: "#FFFFFF",
-    paddingVertical: 12,
+    paddingHorizontal: 14,
   },
   secondaryButtonPressed: {
-    opacity: 0.92,
+    opacity: 0.88,
   },
   secondaryButtonText: {
     fontSize: 14,
@@ -568,14 +728,18 @@ const styles = StyleSheet.create({
     color: "#0F172A",
   },
   deleteButton: {
+    minWidth: 92,
+    minHeight: 46,
+    borderRadius: 16,
     alignItems: "center",
-    borderRadius: 12,
-    backgroundColor: "#FEE2E2",
-    paddingHorizontal: 18,
-    paddingVertical: 12,
+    justifyContent: "center",
+    backgroundColor: "#FEF2F2",
+    borderWidth: 1,
+    borderColor: "#FECACA",
+    paddingHorizontal: 14,
   },
   deleteButtonPressed: {
-    opacity: 0.92,
+    opacity: 0.88,
   },
   deleteButtonText: {
     fontSize: 14,

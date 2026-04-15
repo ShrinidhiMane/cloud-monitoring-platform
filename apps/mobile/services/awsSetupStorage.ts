@@ -27,15 +27,28 @@ export interface AwsSetupProfile {
 }
 
 export interface AwsSetupProfileInput {
-  label: string;
-  region: string;
+  label?: string;
+  region?: string;
   backendUrl: string;
-  accessKeyId: string;
-  secretAccessKey: string;
+  accessKeyId?: string;
+  secretAccessKey?: string;
   sessionToken?: string | null;
-  instanceId: string;
+  instanceId?: string;
   instanceName?: string;
   notes?: string;
+}
+
+function deriveSetupLabel(backendUrl: string): string {
+  try {
+    const parsed = new URL(backendUrl);
+    if (parsed.hostname.trim()) {
+      return parsed.hostname.trim();
+    }
+  } catch {
+    // Fall back to a generic local label when the URL cannot be parsed.
+  }
+
+  return "Monitoring connection";
 }
 
 async function canUseSecureStore(): Promise<boolean> {
@@ -131,15 +144,21 @@ export async function saveAwsSetupProfile(
   input: AwsSetupProfileInput,
 ): Promise<AwsSetupProfile> {
   const timestamp = new Date().toISOString();
+  const normalizedBackendUrl = input.backendUrl.trim();
+
+  if (!normalizedBackendUrl) {
+    throw new Error("A monitoring URL is required.");
+  }
+
   const nextProfile: AwsSetupProfile = {
     id: createProfileId(),
-    label: input.label.trim(),
-    region: input.region.trim(),
-    backendUrl: input.backendUrl.trim(),
-    accessKeyId: input.accessKeyId.trim(),
-    secretAccessKey: input.secretAccessKey.trim(),
+    label: input.label?.trim() || deriveSetupLabel(normalizedBackendUrl),
+    region: input.region?.trim() || "",
+    backendUrl: normalizedBackendUrl,
+    accessKeyId: input.accessKeyId?.trim() || "",
+    secretAccessKey: input.secretAccessKey?.trim() || "",
     sessionToken: input.sessionToken?.trim() || null,
-    instanceId: input.instanceId.trim(),
+    instanceId: input.instanceId?.trim() || "",
     instanceName: input.instanceName?.trim() || "",
     notes: input.notes?.trim() || "",
     createdAt: timestamp,
