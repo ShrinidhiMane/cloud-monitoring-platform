@@ -1,3 +1,4 @@
+import { ScreenStateCard } from "@/components/ScreenStateCard";
 import { useFocusEffect } from "@react-navigation/native";
 import React, { useCallback, useState } from "react";
 import { useRouter } from "expo-router";
