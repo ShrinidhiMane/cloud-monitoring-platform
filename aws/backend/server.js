@@ -24,6 +24,10 @@ const RANGE_CONFIG = {
     lookbackMs: 24 * 60 * 60 * 1000,
     period: 900,
   },
+  "7d": {
+    lookbackMs: 7 * 24 * 60 * 60 * 1000,
+    period: 3600,
+  },
 };
 
 const createAwsClients = () => ({
@@ -63,11 +67,31 @@ function toIsoTimestamp(timestamp) {
     : new Date(timestamp).toISOString();
 }
 
-function buildCpuSeries(datapoints = []) {
+function buildMetricSeries(datapoints = [], metricKey) {
   return sortDatapoints(datapoints).map((point) => ({
     timestamp: toIsoTimestamp(point.Timestamp),
-    value: roundMetricValue(point.Average),
+    value: roundMetricValue(point[metricKey]),
   }));
+}
+
+function getLatestSeriesTimestamp(...seriesCollection) {
+  let latestTimestamp = null;
+
+  for (const series of seriesCollection) {
+    const timestamp = series.at(-1)?.timestamp;
+    if (!timestamp) {
+      continue;
+    }
+
+    if (
+      !latestTimestamp ||
+      Date.parse(timestamp) > Date.parse(latestTimestamp)
+    ) {
+      latestTimestamp = timestamp;
+    }
+  }
+
+  return latestTimestamp;
 }
 
 function getInstanceName(instance) {
@@ -177,11 +201,22 @@ async function loadInstanceMetrics(
       .promise(),
   ]);
 
-  const cpuSeries = buildCpuSeries(cpuData.Datapoints);
+  const cpuSeries = buildMetricSeries(cpuData.Datapoints, "Average");
+  const memorySeries = buildMetricSeries(memoryData.Datapoints, "Average");
+  const networkInSeries = buildMetricSeries(netInData.Datapoints, "Sum");
+  const networkOutSeries = buildMetricSeries(netOutData.Datapoints, "Sum");
 
   return {
     cpuSeries,
-    latestCpuPoint: cpuSeries.at(-1),
+    memorySeries,
+    networkInSeries,
+    networkOutSeries,
+    latestMetricTimestamp: getLatestSeriesTimestamp(
+      cpuSeries,
+      memorySeries,
+      networkInSeries,
+      networkOutSeries,
+    ),
     metrics: {
       cpuUtilization: getLastMetricValue(cpuData.Datapoints, "Average"),
       memoryUtilization: getLastMetricValue(memoryData.Datapoints, "Average"),
@@ -339,7 +374,14 @@ export const createApp = (clients = createAwsClients()) => {
             continue;
           }
 
-          const { cpuSeries, latestCpuPoint, metrics } = await loadInstanceMetrics(
+          const {
+            cpuSeries,
+            memorySeries,
+            networkInSeries,
+            networkOutSeries,
+            latestMetricTimestamp,
+            metrics,
+          } = await loadInstanceMetrics(
             cloudwatch,
             instance,
             startTime,
@@ -369,7 +411,10 @@ export const createApp = (clients = createAwsClients()) => {
             diskReadOps: metrics.diskReadOps,
             diskWriteOps: metrics.diskWriteOps,
             cpuSeries,
-            updatedAt: latestCpuPoint?.timestamp ?? responseTimestamp,
+            memorySeries,
+            networkInSeries,
+            networkOutSeries,
+            updatedAt: latestMetricTimestamp ?? responseTimestamp,
           });
         }
       }

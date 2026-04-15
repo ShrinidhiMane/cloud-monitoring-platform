@@ -11,9 +11,10 @@ import {
 } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 
+import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 
-import { CpuUsageChart } from "@/components/CpuUsageChart";
+import { MetricTrendChart } from "@/components/MetricTrendChart";
 import { useAutoRefresh, type RefreshReason } from "@/hooks/use-auto-refresh";
 import { ScreenStateCard } from "@/components/ScreenStateCard";
 import { SETTINGS_ROUTE, TABS_ROOT_ROUTE } from "@/navigation/routes";
@@ -28,14 +29,10 @@ import {
   readCachedOverviewInstance,
 } from "@/services/monitoringCache";
 import {
-  cacheMonitoringHistorySnapshot,
-  readCachedCpuHistorySnapshot,
-  type CachedCpuHistorySnapshot,
-} from "@/services/metricsHistory";
-import {
   controlInstancePower,
   fetchInstanceMonitoring,
   type InstancePowerAction,
+  type MonitoringMetricPoint,
   type MonitoringInstance,
   type InstanceState,
 } from "api-client";
@@ -60,13 +57,19 @@ const STATE_COLORS: Record<InstanceState, { bg: string; text: string }> = {
   unknown: { bg: "#E0F2FE", text: "#075985" },
 };
 const POLL_INTERVAL_MS = 30_000;
-const MAX_CHART_POINTS = 24;
+const MAX_CHART_POINTS = 18;
 const POWER_ACTIONS: InstancePowerAction[] = ["start", "stop", "reboot"];
-const EMPTY_HISTORY_SNAPSHOT: CachedCpuHistorySnapshot = {
+const EMPTY_METRIC_TREND_SNAPSHOT: TrendMetricSnapshot = {
   chartSeries: [],
   average: 0,
   peak: 0,
   sampleCount: 0,
+};
+const EMPTY_HISTORY_SNAPSHOT: TrendMetricsSnapshot = {
+  cpu: { ...EMPTY_METRIC_TREND_SNAPSHOT },
+  memory: { ...EMPTY_METRIC_TREND_SNAPSHOT },
+  networkIn: { ...EMPTY_METRIC_TREND_SNAPSHOT },
+  networkOut: { ...EMPTY_METRIC_TREND_SNAPSHOT },
 };
 const COMPACT_NUMBER_FORMATTER = new Intl.NumberFormat("en-US", {
   notation: "compact",
@@ -133,6 +136,85 @@ interface MetricTileProps {
   value: string;
 }
 
+interface TrendMetricSnapshot {
+  chartSeries: MonitoringMetricPoint[];
+  average: number;
+  peak: number;
+  sampleCount: number;
+  latestTimestamp?: string;
+  latestValue?: number;
+}
+
+interface TrendMetricsSnapshot {
+  cpu: TrendMetricSnapshot;
+  memory: TrendMetricSnapshot;
+  networkIn: TrendMetricSnapshot;
+  networkOut: TrendMetricSnapshot;
+}
+
+interface CachedMonitoringResult {
+  cachedAt: string | null;
+  summaryMonitoring: MonitoringInstance | null;
+  trendMonitoring: MonitoringInstance | null;
+}
+
+interface TrendMetricCardProps {
+  accentColor: string;
+  accentSurfaceColor: string;
+  formatter: (value?: number) => string;
+  icon: ComponentProps<typeof MaterialCommunityIcons>["name"];
+  label: string;
+  metric: TrendMetricSnapshot;
+  suggestedMax?: number;
+}
+
+interface TrendMetricDefinition {
+  accentColor: string;
+  accentSurfaceColor: string;
+  formatter: (value?: number) => string;
+  icon: ComponentProps<typeof MaterialCommunityIcons>["name"];
+  key: keyof TrendMetricsSnapshot;
+  label: string;
+  suggestedMax?: number;
+}
+
+const TREND_METRICS: TrendMetricDefinition[] = [
+  {
+    key: "cpu",
+    label: "CPU",
+    icon: "cpu-64-bit",
+    accentColor: "#0F766E",
+    accentSurfaceColor: "#E6FFFB",
+    formatter: formatPercent,
+    suggestedMax: 100,
+  },
+  {
+    key: "memory",
+    label: "Memory",
+    icon: "memory",
+    accentColor: "#D97706",
+    accentSurfaceColor: "#FFF7ED",
+    formatter: formatPercent,
+    suggestedMax: 100,
+  },
+  {
+    key: "networkIn",
+    label: "Network In",
+    icon: "download-network-outline",
+    accentColor: "#2563EB",
+    accentSurfaceColor: "#EFF6FF",
+    formatter: formatBytes,
+  },
+  {
+    key: "networkOut",
+    label: "Network Out",
+    icon: "upload-network-outline",
+    accentColor: "#DC2626",
+    accentSurfaceColor: "#FEF2F2",
+    formatter: formatBytes,
+  },
+];
+
 function MetricTile({ label, value }: MetricTileProps) {
   return (
     <View style={styles.metricTile}>
@@ -140,6 +222,172 @@ function MetricTile({ label, value }: MetricTileProps) {
       <Text numberOfLines={1} style={styles.metricValue}>
         {value}
       </Text>
+    </View>
+  );
+}
+
+function formatMetricStat(
+  value: number | undefined,
+  formatter: (value?: number) => string,
+): string {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return "No data";
+  }
+
+  return formatter(value);
+}
+
+function roundMetricValue(value: number): number {
+  return Number(value.toFixed(2));
+}
+
+function buildTrendSnapshot(
+  series: MonitoringMetricPoint[],
+  maxChartPoints = MAX_CHART_POINTS,
+): TrendMetricSnapshot {
+  const validSeries = [...series]
+    .filter(
+      (point): point is MonitoringMetricPoint & { timestamp: string } =>
+        typeof point.timestamp === "string" &&
+        typeof point.value === "number" &&
+        !Number.isNaN(point.value),
+    )
+    .sort((left, right) => {
+      return Date.parse(left.timestamp) - Date.parse(right.timestamp);
+    });
+
+  if (!validSeries.length) {
+    return EMPTY_METRIC_TREND_SNAPSHOT;
+  }
+
+  const bucketSize = Math.max(1, Math.ceil(validSeries.length / maxChartPoints));
+  const chartSeries: MonitoringMetricPoint[] = [];
+  let total = 0;
+  let peak = 0;
+  let sampleCount = 0;
+
+  for (
+    let bucketStart = 0;
+    bucketStart < validSeries.length;
+    bucketStart += bucketSize
+  ) {
+    const bucket = validSeries.slice(bucketStart, bucketStart + bucketSize);
+    const bucketTotal = bucket.reduce((sum, point) => sum + point.value, 0);
+    const bucketAverage = bucketTotal / bucket.length;
+    const bucketLatestPoint = bucket[bucket.length - 1];
+
+    chartSeries.push({
+      ...bucketLatestPoint,
+      value: roundMetricValue(bucketAverage),
+    });
+    total += bucketTotal;
+    peak = Math.max(peak, ...bucket.map((point) => point.value));
+    sampleCount += bucket.length;
+  }
+
+  const latestPoint = validSeries[validSeries.length - 1];
+
+  return {
+    chartSeries,
+    average: roundMetricValue(total / sampleCount),
+    peak: roundMetricValue(peak),
+    sampleCount,
+    latestTimestamp: latestPoint.timestamp,
+    latestValue: roundMetricValue(latestPoint.value),
+  };
+}
+
+function buildTrendMetricsSnapshot(
+  monitoring: MonitoringInstance | null,
+  maxChartPoints = MAX_CHART_POINTS,
+): TrendMetricsSnapshot {
+  if (!monitoring) {
+    return EMPTY_HISTORY_SNAPSHOT;
+  }
+
+  return {
+    cpu: buildTrendSnapshot(monitoring.cpuSeries, maxChartPoints),
+    memory: buildTrendSnapshot(monitoring.memorySeries, maxChartPoints),
+    networkIn: buildTrendSnapshot(monitoring.networkInSeries, maxChartPoints),
+    networkOut: buildTrendSnapshot(
+      monitoring.networkOutSeries,
+      maxChartPoints,
+    ),
+  };
+}
+
+function getLatestHistoryTimestamp(
+  snapshot: TrendMetricsSnapshot,
+): string | undefined {
+  return (
+    snapshot.cpu.latestTimestamp ??
+    snapshot.memory.latestTimestamp ??
+    snapshot.networkIn.latestTimestamp ??
+    snapshot.networkOut.latestTimestamp
+  );
+}
+
+function hasMetricHistorySamples(snapshot: TrendMetricsSnapshot): boolean {
+  return TREND_METRICS.some((metric) => snapshot[metric.key].sampleCount > 0);
+}
+
+function TrendMetricCard({
+  accentColor,
+  accentSurfaceColor,
+  formatter,
+  icon,
+  label,
+  metric,
+  suggestedMax,
+}: TrendMetricCardProps) {
+  const hasData = metric.chartSeries.length > 0;
+  const currentValue = formatMetricStat(metric.latestValue, formatter);
+  const averageValue = formatMetricStat(metric.average, formatter);
+  const peakValue = formatMetricStat(metric.peak, formatter);
+
+  return (
+    <View style={styles.trendCard}>
+      <View style={styles.trendCardHeader}>
+        <View
+          style={[
+            styles.trendIconWrap,
+            {
+              backgroundColor: accentSurfaceColor,
+            },
+          ]}
+        >
+          <MaterialCommunityIcons color={accentColor} name={icon} size={18} />
+        </View>
+        <Text style={styles.trendCardLabel}>{label}</Text>
+      </View>
+
+      <Text style={styles.trendCurrentValue}>{currentValue}</Text>
+
+      <View style={styles.trendStatRow}>
+        <View style={styles.trendStatPill}>
+          <Text style={styles.trendStatLabel}>Avg</Text>
+          <Text style={styles.trendStatValue}>{averageValue}</Text>
+        </View>
+        <View style={styles.trendStatPill}>
+          <Text style={styles.trendStatLabel}>Peak</Text>
+          <Text style={styles.trendStatValue}>{peakValue}</Text>
+        </View>
+      </View>
+
+      {hasData ? (
+        <MetricTrendChart
+          accessibilityLabel={`${label} trend chart`}
+          accentColor={accentColor}
+          averageValue={metric.average}
+          data={metric.chartSeries}
+          suggestedMax={suggestedMax}
+          tickFormatter={formatter}
+        />
+      ) : (
+        <View style={styles.trendEmptyCard}>
+          <Text style={styles.trendEmptyText}>No CloudWatch samples yet</Text>
+        </View>
+      )}
     </View>
   );
 }
@@ -281,7 +529,7 @@ export default function InstanceDetailScreen() {
   const [metricsError, setMetricsError] = useState<string | null>(null);
   const [isUsingCachedMetrics, setIsUsingCachedMetrics] = useState(false);
   const [historySnapshot, setHistorySnapshot] =
-    useState<CachedCpuHistorySnapshot>(EMPTY_HISTORY_SNAPSHOT);
+    useState<TrendMetricsSnapshot>(EMPTY_HISTORY_SNAPSHOT);
   const [apiBaseUrl, setCurrentApiBaseUrl] = useState("");
   const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null);
   const [pendingPowerAction, setPendingPowerAction] =
@@ -293,7 +541,7 @@ export default function InstanceDetailScreen() {
   const [optimisticState, setOptimisticState] = useState<InstanceState | null>(
     null,
   );
-  const remoteRange = timeRange === "7d" ? "24h" : timeRange;
+  const remoteRange = timeRange;
 
   const displayName =
     monitoring?.name ?? fallbackName ?? instanceId ?? "Instance";
@@ -302,11 +550,15 @@ export default function InstanceDetailScreen() {
   const displayType = monitoring?.type ?? fallbackType;
   const displayZone = monitoring?.zone ?? fallbackZone;
   const displayUpdatedAt =
-    monitoring?.updatedAt ?? historySnapshot.latestTimestamp;
+    monitoring?.updatedAt ?? getLatestHistoryTimestamp(historySnapshot);
   const latestCpuValue =
-    monitoring?.cpuPercent ?? historySnapshot.latestCpuPercent;
-  const hasHistory = historySnapshot.sampleCount > 0;
-  const hasChartData = historySnapshot.chartSeries.length > 0;
+    monitoring?.cpuPercent ?? historySnapshot.cpu.latestValue;
+  const hasHistory = TREND_METRICS.some(
+    (metric) => historySnapshot[metric.key].sampleCount > 0,
+  );
+  const hasChartData = TREND_METRICS.some(
+    (metric) => historySnapshot[metric.key].chartSeries.length > 0,
+  );
   const hasLiveMetrics = monitoring !== null;
 
   const openSettings = useCallback(() => {
@@ -314,7 +566,9 @@ export default function InstanceDetailScreen() {
   }, [router]);
 
   const loadCachedMonitoring = useCallback(
-    async (configuredApiBaseUrl: string) => {
+    async (
+      configuredApiBaseUrl: string,
+    ): Promise<CachedMonitoringResult | null> => {
       if (!instanceId) {
         return null;
       }
@@ -326,10 +580,11 @@ export default function InstanceDetailScreen() {
       );
       if (cachedInstanceRecord) {
         return {
-          monitoring: cachedInstanceRecord.monitoring,
           cachedAt:
             cachedInstanceRecord.cachedAt ??
             cachedInstanceRecord.monitoring.updatedAt,
+          summaryMonitoring: cachedInstanceRecord.monitoring,
+          trendMonitoring: cachedInstanceRecord.monitoring,
         };
       }
 
@@ -342,8 +597,9 @@ export default function InstanceDetailScreen() {
       }
 
       return {
-        monitoring: cachedOverviewInstance,
         cachedAt: cachedOverviewInstance.updatedAt,
+        summaryMonitoring: cachedOverviewInstance,
+        trendMonitoring: remoteRange === "1h" ? cachedOverviewInstance : null,
       };
     },
     [instanceId, remoteRange],
@@ -371,54 +627,49 @@ export default function InstanceDetailScreen() {
         const result = await fetchInstanceMonitoring(instanceId, remoteRange);
 
         if (!result) {
-          const [cachedSnapshot, cachedMonitoring] = await Promise.all([
-            readCachedCpuHistorySnapshot(
-              instanceId,
-              timeRange,
-              MAX_CHART_POINTS,
-            ),
-            loadCachedMonitoring(activeApiBaseUrl),
-          ]);
+          const cachedMonitoring = await loadCachedMonitoring(activeApiBaseUrl);
+          const cachedSnapshot = buildTrendMetricsSnapshot(
+            cachedMonitoring?.trendMonitoring ?? null,
+          );
 
-          setMonitoring((current) => cachedMonitoring?.monitoring ?? current);
-          setIsUsingCachedMetrics(Boolean(cachedMonitoring));
+          setMonitoring(
+            (current) => cachedMonitoring?.summaryMonitoring ?? current,
+          );
+          setIsUsingCachedMetrics(Boolean(cachedMonitoring?.summaryMonitoring));
           setLastRefreshedAt(
             (current) => cachedMonitoring?.cachedAt ?? current,
           );
           setHistorySnapshot(cachedSnapshot);
           setMetricsError(
-            cachedMonitoring || cachedSnapshot.sampleCount
-              ? `No live snapshot was returned for ${instanceId}. Showing cached metrics from this device.`
+            cachedMonitoring?.summaryMonitoring || hasMetricHistorySamples(cachedSnapshot)
+              ? `No live snapshot was returned for ${instanceId}. Showing the last cached monitoring response on this device.`
               : `No live snapshot was returned for ${instanceId}.`,
           );
           return;
         }
 
-        const nextHistorySnapshot = await cacheMonitoringHistorySnapshot(
-          result,
-          timeRange,
-          MAX_CHART_POINTS,
-        );
         await cacheMonitoringInstance(activeApiBaseUrl, result, remoteRange);
 
         setMonitoring(result);
         setOptimisticState(null);
         setIsUsingCachedMetrics(false);
-        setHistorySnapshot(nextHistorySnapshot);
+        setHistorySnapshot(buildTrendMetricsSnapshot(result));
         setLastRefreshedAt(new Date().toISOString());
       } catch {
-        const [cachedSnapshot, cachedMonitoring] = await Promise.all([
-          readCachedCpuHistorySnapshot(instanceId, timeRange, MAX_CHART_POINTS),
-          loadCachedMonitoring(activeApiBaseUrl),
-        ]);
+        const cachedMonitoring = await loadCachedMonitoring(activeApiBaseUrl);
+        const cachedSnapshot = buildTrendMetricsSnapshot(
+          cachedMonitoring?.trendMonitoring ?? null,
+        );
 
-        setMonitoring((current) => cachedMonitoring?.monitoring ?? current);
-        setIsUsingCachedMetrics(Boolean(cachedMonitoring));
+        setMonitoring(
+          (current) => cachedMonitoring?.summaryMonitoring ?? current,
+        );
+        setIsUsingCachedMetrics(Boolean(cachedMonitoring?.summaryMonitoring));
         setLastRefreshedAt((current) => cachedMonitoring?.cachedAt ?? current);
         setHistorySnapshot(cachedSnapshot);
         setMetricsError(
-          cachedMonitoring || cachedSnapshot.sampleCount
-            ? `Could not refresh ${instanceId}. Showing cached metrics from this device.`
+          cachedMonitoring?.summaryMonitoring || hasMetricHistorySamples(cachedSnapshot)
+            ? `Could not refresh ${instanceId}. Showing the last cached monitoring response on this device.`
             : `CloudWatch unavailable at ${activeApiBaseUrl || "the configured endpoint"}.`,
         );
       } finally {
@@ -450,18 +701,17 @@ export default function InstanceDetailScreen() {
 
     const loadCachedHistory = async () => {
       const configuredApiBaseUrl = await hydrateApiBaseUrl();
-      const [cachedSnapshot, cachedMonitoring] = await Promise.all([
-        readCachedCpuHistorySnapshot(instanceId, timeRange, MAX_CHART_POINTS),
-        loadCachedMonitoring(configuredApiBaseUrl),
-      ]);
+      const cachedMonitoring = await loadCachedMonitoring(configuredApiBaseUrl);
       if (!isMounted) {
         return;
       }
 
       setCurrentApiBaseUrl(configuredApiBaseUrl);
-      setHistorySnapshot(cachedSnapshot);
-      if (cachedMonitoring) {
-        setMonitoring(cachedMonitoring.monitoring);
+      setHistorySnapshot(
+        buildTrendMetricsSnapshot(cachedMonitoring?.trendMonitoring ?? null),
+      );
+      if (cachedMonitoring?.summaryMonitoring) {
+        setMonitoring(cachedMonitoring.summaryMonitoring);
         setIsUsingCachedMetrics(true);
         setLastRefreshedAt(cachedMonitoring.cachedAt);
       } else {
@@ -587,7 +837,7 @@ export default function InstanceDetailScreen() {
       <ScreenStateCard
         variant="empty"
         title="No metrics yet"
-        message="This instance does not have any live or saved samples in the selected range."
+        message="This instance does not have any live or cached CloudWatch samples in the selected range."
         actions={[
           { label: "Refresh", onPress: retryMetricsLoad, tone: "primary" },
         ]}
@@ -954,14 +1204,14 @@ export default function InstanceDetailScreen() {
           <View style={styles.chartCard}>
             <View style={styles.chartHeader}>
               <View style={styles.chartHeaderText}>
-                <Text style={styles.chartTitle}>CPU Utilization</Text>
+                <Text style={styles.chartTitle}>Performance Trends</Text>
                 <Text style={styles.chartSubtitle}>
-                  Selected range: {timeRange}
+                  CPU, memory, network in, and network out across {timeRange}
                 </Text>
                 {hasHistory ? (
                   <Text style={styles.cacheText}>
-                    Chart history is being rendered from saved on-device
-                    samples.
+                    Trend lines are being rendered from CloudWatch metric
+                    series returned by the monitoring API.
                   </Text>
                 ) : null}
                 {apiBaseUrl ? (
@@ -969,23 +1219,14 @@ export default function InstanceDetailScreen() {
                 ) : null}
                 <Text style={styles.refreshText}>
                   {isUsingCachedMetrics
-                    ? "The latest visible snapshot is being loaded from saved on-device metrics."
+                    ? "The latest visible snapshot is being loaded from the last cached monitoring response on this device."
                     : isAutoRefreshing
                       ? "Auto-refreshing live metrics now…"
                       : "Live metrics refresh automatically every 30 seconds while this screen is open."}
                 </Text>
               </View>
-              <View style={styles.chartStats}>
-                <View style={styles.statBlock}>
-                  <Text style={styles.statLabel}>Avg</Text>
-                  <Text style={styles.statValue}>
-                    {historySnapshot.average}%
-                  </Text>
-                </View>
-                <View style={styles.statBlock}>
-                  <Text style={styles.statLabel}>Peak</Text>
-                  <Text style={styles.statValue}>{historySnapshot.peak}%</Text>
-                </View>
+              <View style={styles.chartRangeBadge}>
+                <Text style={styles.chartRangeBadgeText}>{timeRange}</Text>
               </View>
             </View>
             <TimeRangeSelector value={timeRange} onChange={setTimeRange} />
@@ -993,7 +1234,7 @@ export default function InstanceDetailScreen() {
               <ScreenStateCard
                 compact
                 variant="error"
-                title="Showing saved history"
+                title="Showing cached trends"
                 message={metricsError}
                 actions={[
                   {
@@ -1005,7 +1246,20 @@ export default function InstanceDetailScreen() {
               />
             ) : null}
             {hasChartData ? (
-              <CpuUsageChart data={historySnapshot.chartSeries} />
+              <View style={styles.trendGrid}>
+                {TREND_METRICS.map((metric) => (
+                  <TrendMetricCard
+                    key={metric.key}
+                    accentColor={metric.accentColor}
+                    accentSurfaceColor={metric.accentSurfaceColor}
+                    formatter={metric.formatter}
+                    icon={metric.icon}
+                    label={metric.label}
+                    metric={historySnapshot[metric.key]}
+                    suggestedMax={metric.suggestedMax}
+                  />
+                ))}
+              </View>
             ) : (
               <ScreenStateCard
                 compact
@@ -1018,17 +1272,17 @@ export default function InstanceDetailScreen() {
                 }
                 title={
                   isLoadingMetrics
-                    ? "Loading chart"
+                    ? "Loading trends"
                     : metricsError
-                      ? "Chart unavailable"
-                      : "No CPU samples yet"
+                      ? "Trend history unavailable"
+                      : "No trend samples yet"
                 }
                 message={
                   isLoadingMetrics
-                    ? "Pulling CPU samples for the selected time range."
+                    ? "Pulling CPU, memory, and network samples for the selected time range."
                     : metricsError
                       ? metricsError
-                      : "This instance does not have any CPU samples in the selected range."
+                      : "This instance does not have any CloudWatch metric samples in the selected range."
                 }
                 actions={
                   metricsError
@@ -1353,21 +1607,92 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: "#0F766E",
   },
-  chartStats: {
-    flexDirection: "row",
+  chartRangeBadge: {
+    alignSelf: "flex-start",
+    borderRadius: 999,
+    backgroundColor: "#EEF4FF",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  chartRangeBadgeText: {
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
+    color: "#1D4ED8",
+  },
+  trendGrid: {
     gap: 12,
   },
-  statBlock: {
-    alignItems: "flex-end",
+  trendCard: {
+    borderRadius: 18,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    padding: 14,
+    gap: 12,
   },
-  statLabel: {
-    fontSize: 11,
+  trendCardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  trendIconWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  trendCardLabel: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#0F172A",
+  },
+  trendCurrentValue: {
+    fontSize: 24,
+    fontWeight: "800",
+    color: "#0F172A",
+  },
+  trendStatRow: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  trendStatPill: {
+    flex: 1,
+    borderRadius: 14,
+    backgroundColor: "#F8FAFC",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: 2,
+  },
+  trendStatLabel: {
+    fontSize: 10,
+    fontWeight: "700",
     textTransform: "uppercase",
+    letterSpacing: 0.6,
     color: "#94A3B8",
   },
-  statValue: {
-    fontSize: 14,
-    fontWeight: "600",
+  trendStatValue: {
+    fontSize: 13,
+    fontWeight: "700",
     color: "#0F172A",
+  },
+  trendEmptyCard: {
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 116,
+    borderRadius: 18,
+    backgroundColor: "#F8FAFC",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    paddingHorizontal: 16,
+    paddingVertical: 18,
+  },
+  trendEmptyText: {
+    fontSize: 12,
+    color: "#94A3B8",
   },
 });

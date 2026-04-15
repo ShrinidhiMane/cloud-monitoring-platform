@@ -3,6 +3,12 @@ import { Directory, File, Paths } from "expo-file-system";
 import type { CpuUsagePoint, MonitoringInstance } from "api-client";
 
 export type MetricsHistoryRange = "1h" | "6h" | "24h" | "7d";
+export type MetricHistoryPoint = CpuUsagePoint;
+export type MetricHistoryKey =
+  | "cpuPercent"
+  | "memoryPercent"
+  | "networkInBytes"
+  | "networkOutBytes";
 
 interface StoredMetricSample {
   timestamp: string;
@@ -18,14 +24,23 @@ interface NormalizedMetricSample extends StoredMetricSample {
   timestampMs: number;
 }
 
-export interface CachedCpuHistorySnapshot {
-  chartSeries: CpuUsagePoint[];
+export interface CachedMetricHistorySnapshot {
+  chartSeries: MetricHistoryPoint[];
   average: number;
   peak: number;
   sampleCount: number;
   latestTimestamp?: string;
-  latestCpuPercent?: number;
+  latestValue?: number;
 }
+
+export interface CachedMetricsHistorySnapshot {
+  cpu: CachedMetricHistorySnapshot;
+  memory: CachedMetricHistorySnapshot;
+  networkIn: CachedMetricHistorySnapshot;
+  networkOut: CachedMetricHistorySnapshot;
+}
+
+export type CachedCpuHistorySnapshot = CachedMetricHistorySnapshot;
 
 const HISTORY_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_POINTS_PER_INSTANCE = 2016;
@@ -41,7 +56,7 @@ const CPU_LABEL_FORMATTER = new Intl.DateTimeFormat("en-US", {
   hour: "2-digit",
   minute: "2-digit",
 });
-const EMPTY_HISTORY_SNAPSHOT: CachedCpuHistorySnapshot = {
+const EMPTY_METRIC_HISTORY_SNAPSHOT: CachedMetricHistorySnapshot = {
   chartSeries: [],
   average: 0,
   peak: 0,
@@ -203,45 +218,65 @@ function findRangeStartIndex(
   return low;
 }
 
-function buildHistorySnapshot(
+function buildMetricHistorySnapshot(
   samples: readonly NormalizedMetricSample[],
   range: MetricsHistoryRange,
+  metricKey: MetricHistoryKey,
   maxChartPoints = DEFAULT_MAX_CHART_POINTS,
-): CachedCpuHistorySnapshot {
+): CachedMetricHistorySnapshot {
   if (!samples.length) {
-    return EMPTY_HISTORY_SNAPSHOT;
+    return EMPTY_METRIC_HISTORY_SNAPSHOT;
   }
 
   const cutoff = Date.now() - RANGE_TO_MS[range];
   const startIndex = findRangeStartIndex(samples, cutoff);
-  const sampleCount = samples.length - startIndex;
-  if (!sampleCount) {
-    return EMPTY_HISTORY_SNAPSHOT;
+  if (startIndex >= samples.length) {
+    return EMPTY_METRIC_HISTORY_SNAPSHOT;
   }
 
-  const latestSample = samples[samples.length - 1];
-  const bucketSize = Math.max(1, Math.ceil(sampleCount / maxChartPoints));
-  const chartSeries: CpuUsagePoint[] = [];
+  const scopedSamples = samples.slice(startIndex);
+  const bucketSize = Math.max(1, Math.ceil(scopedSamples.length / maxChartPoints));
+  const chartSeries: MetricHistoryPoint[] = [];
   let total = 0;
   let peak = 0;
+  let sampleCount = 0;
+  let latestSampleWithValue: NormalizedMetricSample | null = null;
 
   for (
-    let bucketStart = startIndex;
-    bucketStart < samples.length;
+    let bucketStart = 0;
+    bucketStart < scopedSamples.length;
     bucketStart += bucketSize
   ) {
-    const bucketEnd = Math.min(bucketStart + bucketSize, samples.length);
+    const bucketEnd = Math.min(bucketStart + bucketSize, scopedSamples.length);
     let bucketTotal = 0;
+    let bucketCount = 0;
+    let bucketLatestSample: NormalizedMetricSample | null = null;
 
     for (let index = bucketStart; index < bucketEnd; index += 1) {
-      const cpuPercent = samples[index].cpuPercent;
-      total += cpuPercent;
-      bucketTotal += cpuPercent;
-      peak = Math.max(peak, cpuPercent);
+      const sample = scopedSamples[index];
+      const metricValue = sample[metricKey];
+
+      if (typeof metricValue !== "number" || Number.isNaN(metricValue)) {
+        continue;
+      }
+
+      total += metricValue;
+      bucketTotal += metricValue;
+      bucketCount += 1;
+      sampleCount += 1;
+      peak = Math.max(peak, metricValue);
+      bucketLatestSample = sample;
+      latestSampleWithValue = sample;
     }
 
-    const bucketAverage = bucketTotal / (bucketEnd - bucketStart);
-    chartSeries.push(toCpuUsagePoint(samples[bucketEnd - 1], bucketAverage));
+    if (bucketCount > 0 && bucketLatestSample) {
+      const bucketAverage = bucketTotal / bucketCount;
+      chartSeries.push(toCpuUsagePoint(bucketLatestSample, bucketAverage));
+    }
+  }
+
+  if (!sampleCount || !latestSampleWithValue) {
+    return EMPTY_METRIC_HISTORY_SNAPSHOT;
   }
 
   return {
@@ -249,8 +284,36 @@ function buildHistorySnapshot(
     average: Math.round(total / sampleCount),
     peak: roundMetricValue(peak),
     sampleCount,
-    latestTimestamp: latestSample.timestamp,
-    latestCpuPercent: roundMetricValue(latestSample.cpuPercent),
+    latestTimestamp: latestSampleWithValue.timestamp,
+    latestValue: roundMetricValue(latestSampleWithValue[metricKey] ?? 0),
+  };
+}
+
+function buildMetricsHistorySnapshot(
+  samples: readonly NormalizedMetricSample[],
+  range: MetricsHistoryRange,
+  maxChartPoints = DEFAULT_MAX_CHART_POINTS,
+): CachedMetricsHistorySnapshot {
+  return {
+    cpu: buildMetricHistorySnapshot(samples, range, "cpuPercent", maxChartPoints),
+    memory: buildMetricHistorySnapshot(
+      samples,
+      range,
+      "memoryPercent",
+      maxChartPoints,
+    ),
+    networkIn: buildMetricHistorySnapshot(
+      samples,
+      range,
+      "networkInBytes",
+      maxChartPoints,
+    ),
+    networkOut: buildMetricHistorySnapshot(
+      samples,
+      range,
+      "networkOutBytes",
+      maxChartPoints,
+    ),
   };
 }
 
@@ -410,8 +473,21 @@ export async function readCachedCpuHistorySnapshot(
   range: MetricsHistoryRange,
   maxChartPoints = DEFAULT_MAX_CHART_POINTS,
 ): Promise<CachedCpuHistorySnapshot> {
+  const snapshot = await readCachedMetricsHistorySnapshot(
+    instanceId,
+    range,
+    maxChartPoints,
+  );
+  return snapshot.cpu;
+}
+
+export async function readCachedMetricsHistorySnapshot(
+  instanceId: string,
+  range: MetricsHistoryRange,
+  maxChartPoints = DEFAULT_MAX_CHART_POINTS,
+): Promise<CachedMetricsHistorySnapshot> {
   const storedSamples = await readStoredSamples(instanceId);
-  return buildHistorySnapshot(storedSamples, range, maxChartPoints);
+  return buildMetricsHistorySnapshot(storedSamples, range, maxChartPoints);
 }
 
 export async function cacheMonitoringHistorySnapshot(
@@ -419,6 +495,19 @@ export async function cacheMonitoringHistorySnapshot(
   range: MetricsHistoryRange,
   maxChartPoints = DEFAULT_MAX_CHART_POINTS,
 ): Promise<CachedCpuHistorySnapshot> {
+  const snapshot = await cacheMonitoringMetricsHistorySnapshot(
+    monitoring,
+    range,
+    maxChartPoints,
+  );
+  return snapshot.cpu;
+}
+
+export async function cacheMonitoringMetricsHistorySnapshot(
+  monitoring: MonitoringInstance,
+  range: MetricsHistoryRange,
+  maxChartPoints = DEFAULT_MAX_CHART_POINTS,
+): Promise<CachedMetricsHistorySnapshot> {
   const nextSamples = await mergeMonitoringHistory(monitoring);
-  return buildHistorySnapshot(nextSamples, range, maxChartPoints);
+  return buildMetricsHistorySnapshot(nextSamples, range, maxChartPoints);
 }
