@@ -5,6 +5,8 @@ build/
 *.log
 .env
 .env.*
+!.env.example
+!.env.*.example
 tsconfig.tsbuildinfo
 devices.json
 package-lock.json
