@@ -3,26 +3,78 @@ import { StyleSheet, View, Animated } from "react-native";
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
-import { TABS_ROOT_ROUTE } from "@/navigation/routes";
-import { useEffect, useRef } from "react";
+import { useLocalAuth } from "@/providers/local-auth-provider";
+import {
+  hasConnectedAwsSetup,
+  resolveNextAppRoute,
+} from "@/services/appOnboarding";
+import { useEffect, useRef, useState } from "react";
 
 const AnimatedThemedView = Animated.createAnimatedComponent(ThemedView);
 
 export default function App() {
   const router = useRouter();
   const translateAnim = useRef(new Animated.Value(0)).current;
+  const {
+    hasBiometricPreferenceSet,
+    hasPinConfigured,
+    isHydrating,
+    isUnlocked,
+  } = useLocalAuth();
+  const [hasActiveAwsSetup, setHasActiveAwsSetup] = useState<boolean | null>(
+    null,
+  );
 
   useEffect(() => {
+    let isMounted = true;
+
+    const loadSetupState = async () => {
+      const nextValue = await hasConnectedAwsSetup();
+      if (!isMounted) {
+        return;
+      }
+
+      setHasActiveAwsSetup(nextValue);
+    };
+
+    void loadSetupState();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (isHydrating || hasActiveAwsSetup === null) {
+      return;
+    }
+
+    translateAnim.setValue(0);
     Animated.timing(translateAnim, {
       toValue: 1,
       duration: 2000,
       useNativeDriver: false,
     }).start(({ finished }) => {
       if (finished) {
-        router.replace(TABS_ROOT_ROUTE);
+        router.replace(
+          resolveNextAppRoute({
+            hasActiveAwsSetup,
+            hasBiometricPreferenceSet,
+            hasPinConfigured,
+            isUnlocked,
+          }),
+        );
       }
     });
-  }, [translateAnim, router]);
+  }, [
+    hasActiveAwsSetup,
+    hasBiometricPreferenceSet,
+    hasPinConfigured,
+    isHydrating,
+    isUnlocked,
+    router,
+    translateAnim,
+  ]);
 
   return (
     <ThemedView style={styles.container}>

@@ -2,6 +2,8 @@ import { Platform } from "react-native";
 import * as SecureStore from "expo-secure-store";
 import { MONITORING_URL, getApiBaseUrl, setApiBaseUrl } from "api-client";
 
+import { getActiveAwsSetup } from "@/services/awsSetupStorage";
+
 const API_BASE_URL_KEY = "settings.apiBaseUrl";
 const FALLBACK_MONITORING_URL = MONITORING_URL;
 
@@ -84,16 +86,26 @@ export function getDefaultApiBaseUrl(): string {
 }
 
 export async function hydrateApiBaseUrl(): Promise<string> {
-  const savedValue = await getStoredValue(API_BASE_URL_KEY);
-  const nextValue = savedValue
-    ? normalizeMonitoringUrl(savedValue)
-    : defaultMonitoringUrl;
+  const [savedValue, activeSetup] = await Promise.all([
+    getStoredValue(API_BASE_URL_KEY),
+    getActiveAwsSetup(),
+  ]);
+  const nextValue = activeSetup?.backendUrl
+    ? normalizeMonitoringUrl(activeSetup.backendUrl)
+    : savedValue
+      ? normalizeMonitoringUrl(savedValue)
+      : defaultMonitoringUrl;
 
   setApiBaseUrl(toApiBaseUrl(nextValue));
   return nextValue;
 }
 
 export async function getConfiguredApiBaseUrl(): Promise<string> {
+  const activeSetup = await getActiveAwsSetup();
+  if (activeSetup?.backendUrl) {
+    return normalizeMonitoringUrl(activeSetup.backendUrl);
+  }
+
   const savedValue = await getStoredValue(API_BASE_URL_KEY);
   if (savedValue) {
     return normalizeMonitoringUrl(savedValue);
