@@ -1,9 +1,9 @@
 import { getApiBaseUrl, getMonitoringUrl } from "./constants";
 import type {
-  CpuUsagePoint,
   InstancePowerAction,
   InstancePowerResponse,
   InstanceState,
+  MonitoringMetricPoint,
   MonitoringInstance,
   MonitoringResponse,
 } from "./types";
@@ -108,6 +108,9 @@ interface MonitoringInstanceResponse {
   diskWriteOps?: number;
   updatedAt?: string;
   cpuSeries?: MonitoringMetricPointResponse[];
+  memorySeries?: MonitoringMetricPointResponse[];
+  networkInSeries?: MonitoringMetricPointResponse[];
+  networkOutSeries?: MonitoringMetricPointResponse[];
   metrics?: MonitoringMetricsResponse;
 }
 
@@ -139,10 +142,10 @@ function formatMetricLabel(timestamp: string): string {
   return CPU_LABEL_FORMATTER.format(new Date(timestamp));
 }
 
-function normalizeCpuSeries(
+function normalizeMetricSeries(
   points: MonitoringMetricPointResponse[] = [],
-): CpuUsagePoint[] {
-  const normalizedSeries: CpuUsagePoint[] = [];
+): MonitoringMetricPoint[] {
+  const normalizedSeries: MonitoringMetricPoint[] = [];
 
   for (const point of points) {
     if (
@@ -162,12 +165,100 @@ function normalizeCpuSeries(
   return normalizedSeries;
 }
 
+function getLastSeriesValue(
+  points: MonitoringMetricPoint[],
+): number | undefined {
+  return points[points.length - 1]?.value;
+}
+
+function getLatestSeriesTimestamp(
+  ...seriesCollection: MonitoringMetricPoint[][]
+): string | undefined {
+  let latestTimestamp: string | undefined;
+
+  for (const series of seriesCollection) {
+    const timestamp = series[series.length - 1]?.timestamp;
+    if (!timestamp) {
+      continue;
+    }
+
+    if (
+      !latestTimestamp ||
+      Date.parse(timestamp) > Date.parse(latestTimestamp)
+    ) {
+      latestTimestamp = timestamp;
+    }
+  }
+
+  return latestTimestamp;
+}
+
+function buildFallbackMetricSeries(
+  rawValue: number | undefined,
+  timestamp: string | undefined,
+  existingSeries: MonitoringMetricPoint[],
+): MonitoringMetricPoint[] {
+  if (
+    existingSeries.length > 0 ||
+    typeof rawValue !== "number" ||
+    Number.isNaN(rawValue) ||
+    typeof timestamp !== "string"
+  ) {
+    return existingSeries;
+  }
+
+  return [
+    {
+      timestamp,
+      label: formatMetricLabel(timestamp),
+      value: roundMetricValue(rawValue),
+    },
+  ];
+}
+
 function normalizeMonitoringInstance(
   instance: MonitoringInstanceResponse,
 ): MonitoringInstance {
   const instanceId = instance.id ?? instance.instanceId ?? "unknown-instance";
   const metrics = instance.metrics ?? {};
-  const cpuSeries = normalizeCpuSeries(instance.cpuSeries);
+  const rawCpuValue = instance.cpuPercent ?? metrics.cpuUtilization;
+  const rawMemoryValue = instance.memoryPercent ?? metrics.memoryUtilization;
+  const rawNetworkInValue = instance.networkInBytes ?? metrics.networkInBytes;
+  const rawNetworkOutValue =
+    instance.networkOutBytes ?? metrics.networkOutBytes;
+  const baseCpuSeries = normalizeMetricSeries(instance.cpuSeries);
+  const baseMemorySeries = normalizeMetricSeries(instance.memorySeries);
+  const baseNetworkInSeries = normalizeMetricSeries(instance.networkInSeries);
+  const baseNetworkOutSeries = normalizeMetricSeries(instance.networkOutSeries);
+  const fallbackTimestamp =
+    instance.updatedAt ??
+    getLatestSeriesTimestamp(
+      baseCpuSeries,
+      baseMemorySeries,
+      baseNetworkInSeries,
+      baseNetworkOutSeries,
+    ) ??
+    new Date().toISOString();
+  const cpuSeries = buildFallbackMetricSeries(
+    rawCpuValue,
+    fallbackTimestamp,
+    baseCpuSeries,
+  );
+  const memorySeries = buildFallbackMetricSeries(
+    rawMemoryValue,
+    fallbackTimestamp,
+    baseMemorySeries,
+  );
+  const networkInSeries = buildFallbackMetricSeries(
+    rawNetworkInValue,
+    fallbackTimestamp,
+    baseNetworkInSeries,
+  );
+  const networkOutSeries = buildFallbackMetricSeries(
+    rawNetworkOutValue,
+    fallbackTimestamp,
+    baseNetworkOutSeries,
+  );
 
   return {
     id: instanceId,
@@ -175,24 +266,34 @@ function normalizeMonitoringInstance(
     state: instance.state,
     type: instance.type,
     zone: instance.zone,
-    cpuPercent: roundMetricValue(instance.cpuPercent ?? metrics.cpuUtilization),
+    cpuPercent: roundMetricValue(
+      rawCpuValue ?? getLastSeriesValue(cpuSeries),
+    ),
     memoryPercent: roundMetricValue(
-      instance.memoryPercent ?? metrics.memoryUtilization,
+      rawMemoryValue ?? getLastSeriesValue(memorySeries),
     ),
     networkInBytes: roundMetricValue(
-      instance.networkInBytes ?? metrics.networkInBytes,
+      rawNetworkInValue ?? getLastSeriesValue(networkInSeries),
     ),
     networkOutBytes: roundMetricValue(
-      instance.networkOutBytes ?? metrics.networkOutBytes,
+      rawNetworkOutValue ?? getLastSeriesValue(networkOutSeries),
     ),
     diskReadOps: roundMetricValue(instance.diskReadOps ?? metrics.diskReadOps),
     diskWriteOps: roundMetricValue(
       instance.diskWriteOps ?? metrics.diskWriteOps,
     ),
     cpuSeries,
+    memorySeries,
+    networkInSeries,
+    networkOutSeries,
     updatedAt:
-      instance.updatedAt ??
-      cpuSeries[cpuSeries.length - 1]?.timestamp ??
+      fallbackTimestamp ??
+      getLatestSeriesTimestamp(
+        cpuSeries,
+        memorySeries,
+        networkInSeries,
+        networkOutSeries,
+      ) ??
       new Date().toISOString(),
   };
 }

@@ -22,7 +22,10 @@ export interface MonitoringInstance extends InstanceSummary {
   networkOutBytes: number;
   diskReadOps: number;
   diskWriteOps: number;
-  cpuSeries: import("./metrics").CpuUsagePoint[];
+  cpuSeries: import("./metrics").MonitoringMetricPoint[];
+  memorySeries: import("./metrics").MonitoringMetricPoint[];
+  networkInSeries: import("./metrics").MonitoringMetricPoint[];
+  networkOutSeries: import("./metrics").MonitoringMetricPoint[];
   updatedAt: string;
 }
 

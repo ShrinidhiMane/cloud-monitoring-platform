@@ -11,7 +11,6 @@ import {
   cacheMonitoringOverview,
   readCachedMonitoringOverview,
 } from "@/services/monitoringCache";
-import { warmMonitoringHistory } from "@/services/metricsHistory";
 import type { MonitoringResponse, MonitoringInstance } from "api-client";
 import { fetchMonitoringOverview } from "api-client";
 
@@ -168,11 +167,6 @@ export default function InstancesScreen() {
           setStatusMessage(
             `Live data connected to ${apiBaseUrl}. Auto-refresh runs every 30 seconds while this screen is open.`,
           );
-
-          // Warm local history in the background so the detail screen can open fast.
-          void Promise.allSettled(
-            liveInstances.map((instance) => warmMonitoringHistory(instance)),
-          );
         } else {
           setStatusMessage(
             `Connected to ${apiBaseUrl}. The screen will keep checking every 30 seconds, but no running instances were returned.`,
@@ -301,12 +295,11 @@ export default function InstancesScreen() {
       return (
         <ScreenStateCard
           variant="error"
-          title="Couldn't load instances"
+          title="Couldn’t load instances"
           message={errorMessage}
           actions={[
             { label: "Try Again", onPress: handleRetry, tone: "primary" },
             { label: "Open Settings", onPress: handleOpenSettings },
-            { label: "Dismiss", onPress: () => setErrorMessage(null) },
           ]}
         />
       );

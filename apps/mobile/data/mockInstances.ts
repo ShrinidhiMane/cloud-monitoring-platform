@@ -13,6 +13,9 @@ export const mockInstances: MonitoringInstance[] = [
     diskReadOps: 112,
     diskWriteOps: 47,
     cpuSeries: [],
+    memorySeries: [],
+    networkInSeries: [],
+    networkOutSeries: [],
     updatedAt: new Date().toISOString(),
   },
   {
@@ -27,6 +30,9 @@ export const mockInstances: MonitoringInstance[] = [
     diskReadOps: 0,
     diskWriteOps: 0,
     cpuSeries: [],
+    memorySeries: [],
+    networkInSeries: [],
+    networkOutSeries: [],
     updatedAt: new Date().toISOString(),
   },
   {
@@ -41,6 +47,9 @@ export const mockInstances: MonitoringInstance[] = [
     diskReadOps: 28,
     diskWriteOps: 11,
     cpuSeries: [],
+    memorySeries: [],
+    networkInSeries: [],
+    networkOutSeries: [],
     updatedAt: new Date().toISOString(),
   },
   {
@@ -55,6 +64,9 @@ export const mockInstances: MonitoringInstance[] = [
     diskReadOps: 214,
     diskWriteOps: 143,
     cpuSeries: [],
+    memorySeries: [],
+    networkInSeries: [],
+    networkOutSeries: [],
     updatedAt: new Date().toISOString(),
   },
 ];

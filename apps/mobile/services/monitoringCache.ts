@@ -1,6 +1,10 @@
 import { Platform } from "react-native";
 import { Directory, File, Paths } from "expo-file-system";
-import type { MonitoringInstance, MonitoringResponse } from "api-client";
+import type {
+  MonitoringInstance,
+  MonitoringMetricPoint,
+  MonitoringResponse,
+} from "api-client";
 
 const CACHE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const OVERVIEW_FILE_SUFFIX = "overview";
@@ -18,6 +22,75 @@ interface CachedInstanceRecord {
 
 const memoryOverviewCache = new Map<string, CachedOverviewRecord>();
 const memoryInstanceCache = new Map<string, CachedInstanceRecord>();
+
+function formatMetricLabel(timestamp: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(timestamp));
+}
+
+function roundMetricValue(value?: number): number {
+  return Number((value ?? 0).toFixed(2));
+}
+
+function buildFallbackMetricSeries(
+  value: number | undefined,
+  timestamp: string,
+  existingSeries: MonitoringMetricPoint[],
+): MonitoringMetricPoint[] {
+  if (
+    existingSeries.length > 0 ||
+    typeof value !== "number" ||
+    Number.isNaN(value)
+  ) {
+    return existingSeries;
+  }
+
+  return [
+    {
+      timestamp,
+      label: formatMetricLabel(timestamp),
+      value: roundMetricValue(value),
+    },
+  ];
+}
+
+function normalizeMonitoringInstance(
+  monitoring: MonitoringInstance,
+  fallbackTimestamp: string,
+): MonitoringInstance {
+  const updatedAt = sanitizeTimestamp(monitoring.updatedAt) ?? fallbackTimestamp;
+  const cpuSeries = buildFallbackMetricSeries(
+    monitoring.cpuPercent,
+    updatedAt,
+    monitoring.cpuSeries ?? [],
+  );
+  const memorySeries = buildFallbackMetricSeries(
+    monitoring.memoryPercent,
+    updatedAt,
+    monitoring.memorySeries ?? [],
+  );
+  const networkInSeries = buildFallbackMetricSeries(
+    monitoring.networkInBytes,
+    updatedAt,
+    monitoring.networkInSeries ?? [],
+  );
+  const networkOutSeries = buildFallbackMetricSeries(
+    monitoring.networkOutBytes,
+    updatedAt,
+    monitoring.networkOutSeries ?? [],
+  );
+
+  return {
+    ...monitoring,
+    updatedAt,
+    cpuSeries,
+    memorySeries,
+    networkInSeries,
+    networkOutSeries,
+  };
+}
 
 function canUseFileCache(): boolean {
   return Platform.OS !== "web";
@@ -135,7 +208,9 @@ function normalizeOverviewRecord(
       ...record.response,
       timestamp: sanitizeTimestamp(record.response.timestamp) ?? cachedAt,
       region: record.response.region ?? "",
-      instances: record.response.instances,
+      instances: record.response.instances.map((instance) =>
+        normalizeMonitoringInstance(instance, cachedAt),
+      ),
     },
   };
 }
@@ -157,11 +232,7 @@ function normalizeInstanceRecord(
   return {
     cachedAt,
     range: record.range,
-    monitoring: {
-      ...record.monitoring,
-      updatedAt: sanitizeTimestamp(record.monitoring.updatedAt) ?? cachedAt,
-      cpuSeries: record.monitoring.cpuSeries ?? [],
-    },
+    monitoring: normalizeMonitoringInstance(record.monitoring, cachedAt),
   };
 }
 

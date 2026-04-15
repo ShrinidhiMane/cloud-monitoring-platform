@@ -146,6 +146,18 @@ test("GET /monitoring returns aggregated EC2 and S3 data", async () => {
   assert.equal(response.body.instances[0].metrics.cpuUtilization, 12.34);
   assert.equal(response.body.instances[0].metrics.memoryUtilization, 45.67);
   assert.equal(response.body.instances[0].cpuPercent, 12.34);
+  assert.deepEqual(response.body.instances[0].cpuSeries, [
+    { timestamp: "2026-03-27T12:00:00.000Z", value: 12.34 },
+  ]);
+  assert.deepEqual(response.body.instances[0].memorySeries, [
+    { timestamp: "2026-03-27T12:00:00.000Z", value: 45.67 },
+  ]);
+  assert.deepEqual(response.body.instances[0].networkInSeries, [
+    { timestamp: "2026-03-27T12:00:00.000Z", value: 1200 },
+  ]);
+  assert.deepEqual(response.body.instances[0].networkOutSeries, [
+    { timestamp: "2026-03-27T12:00:00.000Z", value: 2400 },
+  ]);
   assert.equal(response.body.s3[0].bucketName, "team-bucket");
   assert.equal(response.body.s3[0].encryptionEnabled, true);
   assert.equal(response.body.s3[0].publicAccessBlocked, true);
