@@ -7,6 +7,14 @@ AWS.config.update({ region: "us-east-2" });
 const POWER_ACTIONS = new Set(["start", "stop", "reboot"]);
 
 const DEFAULT_RANGE = "1h";
+
+const ALLOWED_INSTANCE_IDS = new Set(
+  (process.env.AWS_ALLOWED_INSTANCE_IDS || "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean),
+);
+
 const RANGE_CONFIG = {
   "15m": {
     lookbackMs: 15 * 60 * 1000,
@@ -50,9 +58,7 @@ function roundMetricValue(value) {
 
 function sortDatapoints(datapoints = []) {
   return [...datapoints].sort((left, right) => {
-    return (
-      new Date(left.Timestamp).getTime() - new Date(right.Timestamp).getTime()
-    );
+    return new Date(left.Timestamp).getTime() - new Date(right.Timestamp).getTime();
   });
 }
 
@@ -496,7 +502,7 @@ export const createApp = (clients = createAwsClients()) => {
   return app;
 };
 
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 
 if (process.env.RUN_BACKEND_SERVER === "true") {
   const app = createApp();

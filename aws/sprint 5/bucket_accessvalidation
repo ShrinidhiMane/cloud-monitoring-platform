@@ -1,0 +1,16 @@
+# S3 Public Access Block Validation (Sprint 5)
+
+## Objective
+Ensure that the S3 bucket is not publicly accessible and complies with AWS security best practices.
+
+## Command Used
+aws s3api get-public-access-block --bucket ser517-monitoring-bucket-team5 --region us-east-2 --output table
+
+## Steps Performed
+- Retrieved S3 public access block configuration using AWS S3 API.
+- Verified that all public access settings are enabled.
+- Confirmed that the bucket is not publicly exposed.
+- Validated IAM permissions required for public access configuration retrieval.
+
+## Result
+Successfully confirmed that public access block is enabled for the S3 bucket.

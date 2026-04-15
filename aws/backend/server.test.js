@@ -136,6 +136,7 @@ test("GET /monitoring returns aggregated EC2 and S3 data", async () => {
 
   assert.equal(response.status, 200);
   assert.equal(response.body.region, "us-east-2");
+  assert.equal(response.body.status, "healthy");
   assert.equal(response.body.instances.length, 1);
   assert.equal(response.body.s3.length, 1);
   assert.equal(response.body.security.length, 1);
@@ -251,5 +252,14 @@ test("unknown routes return 404", async () => {
   const response = await request(app).get("/does-not-exist");
 
   assert.equal(response.status, 404);
-  assert.equal(response.body.error, "Route not found");
+  assert.equal(response.body.error, "Route was not found");
+});
+
+test("GET /monitoring includes infrastructure health status", async () => {
+  const app = createApp(buildClients());
+
+  const response = await request(app).get("/monitoring");
+
+  assert.equal(response.status, 200);
+  assert.ok(["healthy", "degraded", "unknown"].includes(response.body.status));
 });
