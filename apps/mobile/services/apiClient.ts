@@ -1,6 +1,7 @@
 import {
   API_URL,
   apiFetch as baseApiFetch,
+  controlInstancePower as controlSharedInstancePower,
   createApiClient,
   fetchInstanceMonitoring as fetchSharedInstanceMonitoring,
   fetchMonitoringOverview,
@@ -10,6 +11,8 @@ import {
 
 import type {
   ApiClient,
+  InstancePowerAction,
+  InstancePowerResponse,
   InstanceState,
   MonitoringInstance,
   MonitoringResponse,
@@ -35,6 +38,8 @@ export {
 
 export type {
   ApiClient,
+  InstancePowerAction,
+  InstancePowerResponse,
   InstanceState,
   MonitoringInstance,
   MonitoringResponse,
@@ -52,4 +57,11 @@ export async function fetchInstanceMonitoring(
   range?: string,
 ): Promise<MonitoringInstance | null> {
   return fetchSharedInstanceMonitoring(instanceId, range);
+}
+
+export async function controlInstancePower(
+  instanceId: string,
+  action: InstancePowerAction,
+): Promise<InstancePowerResponse> {
+  return controlSharedInstancePower(instanceId, action);
 }

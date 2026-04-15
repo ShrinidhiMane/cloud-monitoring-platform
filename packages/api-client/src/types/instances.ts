@@ -31,3 +31,14 @@ export interface MonitoringResponse {
   region: string;
   timestamp: string;
 }
+
+export type InstancePowerAction = "start" | "stop" | "reboot";
+
+export interface InstancePowerResponse {
+  instanceId: string;
+  action: InstancePowerAction;
+  status: "accepted";
+  previousState: InstanceState | null;
+  currentState: InstanceState | null;
+  requestId: string | null;
+}

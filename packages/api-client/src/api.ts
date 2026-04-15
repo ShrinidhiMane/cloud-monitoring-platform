@@ -1,9 +1,48 @@
 import { getApiBaseUrl, getMonitoringUrl } from "./constants";
 import type {
   CpuUsagePoint,
+  InstancePowerAction,
+  InstancePowerResponse,
+  InstanceState,
   MonitoringInstance,
   MonitoringResponse,
 } from "./types";
+
+const KNOWN_INSTANCE_STATES: InstanceState[] = [
+  "pending",
+  "running",
+  "stopping",
+  "stopped",
+  "shutting-down",
+  "terminated",
+  "unknown",
+];
+
+function extractErrorMessage(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as {
+      error?: string;
+      message?: string;
+    };
+
+    if (typeof parsed.message === "string" && parsed.message.trim()) {
+      return parsed.message.trim();
+    }
+
+    if (typeof parsed.error === "string" && parsed.error.trim()) {
+      return parsed.error.trim();
+    }
+  } catch {
+    return trimmed;
+  }
+
+  return trimmed;
+}
 
 export async function apiFetch<T>(
   path: string,
@@ -25,7 +64,8 @@ export async function apiFetch<T>(
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`HTTP ${res.status}: ${text || res.statusText}`);
+    const message = extractErrorMessage(text);
+    throw new Error(message || `HTTP ${res.status}: ${res.statusText}`);
   }
 
   return (await res.json()) as T;
@@ -33,6 +73,10 @@ export async function apiFetch<T>(
 
 function buildMonitoringUrl(range?: string): string {
   return getMonitoringUrl(range);
+}
+
+function buildInstancePowerPath(instanceId: string): string {
+  return `/instances/${encodeURIComponent(instanceId)}/power`;
 }
 
 interface MonitoringMetricPointResponse {
@@ -71,6 +115,15 @@ interface MonitoringApiResponse {
   instances?: MonitoringInstanceResponse[];
   region?: string;
   timestamp?: string;
+}
+
+interface InstancePowerApiResponse {
+  action?: InstancePowerAction;
+  currentState?: string | null;
+  instanceId?: string;
+  previousState?: string | null;
+  requestId?: string | null;
+  status?: InstancePowerResponse["status"];
 }
 
 const CPU_LABEL_FORMATTER = new Intl.DateTimeFormat("en-US", {
@@ -144,6 +197,16 @@ function normalizeMonitoringInstance(
   };
 }
 
+function normalizeInstanceState(value?: string | null): InstanceState | null {
+  if (!value) {
+    return null;
+  }
+
+  return KNOWN_INSTANCE_STATES.includes(value as InstanceState)
+    ? (value as InstanceState)
+    : null;
+}
+
 export async function fetchMonitoringOverview(
   range?: string,
 ): Promise<MonitoringResponse> {
@@ -166,4 +229,26 @@ export async function fetchInstanceMonitoring(
   return (
     response.instances.find((instance) => instance.id === instanceId) ?? null
   );
+}
+
+export async function controlInstancePower(
+  instanceId: string,
+  action: InstancePowerAction,
+): Promise<InstancePowerResponse> {
+  const response = await apiFetch<InstancePowerApiResponse>(
+    buildInstancePowerPath(instanceId),
+    {
+      method: "POST",
+      body: JSON.stringify({ action }),
+    },
+  );
+
+  return {
+    instanceId: response.instanceId ?? instanceId,
+    action: response.action ?? action,
+    status: response.status ?? "accepted",
+    previousState: normalizeInstanceState(response.previousState),
+    currentState: normalizeInstanceState(response.currentState),
+    requestId: response.requestId ?? null,
+  };
 }
