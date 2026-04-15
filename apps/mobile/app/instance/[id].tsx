@@ -1,5 +1,14 @@
+import type { ComponentProps } from "react";
 import React, { useCallback, useEffect, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
@@ -24,7 +33,9 @@ import {
   type CachedCpuHistorySnapshot,
 } from "@/services/metricsHistory";
 import {
+  controlInstancePower,
   fetchInstanceMonitoring,
+  type InstancePowerAction,
   type MonitoringInstance,
   type InstanceState,
 } from "api-client";
@@ -50,6 +61,7 @@ const STATE_COLORS: Record<InstanceState, { bg: string; text: string }> = {
 };
 const POLL_INTERVAL_MS = 30_000;
 const MAX_CHART_POINTS = 24;
+const POWER_ACTIONS: InstancePowerAction[] = ["start", "stop", "reboot"];
 const EMPTY_HISTORY_SNAPSHOT: CachedCpuHistorySnapshot = {
   chartSeries: [],
   average: 0,
@@ -69,6 +81,52 @@ const REFRESH_TIMESTAMP_FORMATTER = new Intl.DateTimeFormat("en-US", {
   minute: "2-digit",
   second: "2-digit",
 });
+const ENABLED_POWER_ACTION_STATES: Record<InstancePowerAction, InstanceState[]> =
+  {
+    start: ["stopped"],
+    stop: ["running"],
+    reboot: ["running"],
+  };
+
+interface PowerActionCopy {
+  accentBackgroundColor: string;
+  accentBorderColor: string;
+  accentTextColor: string;
+  description: string;
+  icon: ComponentProps<typeof MaterialIcons>["name"];
+  label: string;
+  pendingLabel: string;
+}
+
+const POWER_ACTION_COPY: Record<InstancePowerAction, PowerActionCopy> = {
+  start: {
+    accentBackgroundColor: "#ECFDF5",
+    accentBorderColor: "#A7F3D0",
+    accentTextColor: "#166534",
+    description: "Bring a stopped instance back online.",
+    icon: "play-arrow",
+    label: "Start",
+    pendingLabel: "Starting...",
+  },
+  stop: {
+    accentBackgroundColor: "#FEF2F2",
+    accentBorderColor: "#FECACA",
+    accentTextColor: "#991B1B",
+    description: "Gracefully power down a running instance.",
+    icon: "stop-circle",
+    label: "Stop",
+    pendingLabel: "Stopping...",
+  },
+  reboot: {
+    accentBackgroundColor: "#FFFBEB",
+    accentBorderColor: "#FDE68A",
+    accentTextColor: "#92400E",
+    description: "Restart the guest operating system in place.",
+    icon: "autorenew",
+    label: "Reboot",
+    pendingLabel: "Rebooting...",
+  },
+};
 
 interface MetricTileProps {
   label: string;
@@ -161,6 +219,47 @@ function formatRefreshTimestamp(timestamp?: string | null): string {
   return REFRESH_TIMESTAMP_FORMATTER.format(parsedTimestamp);
 }
 
+function isPowerActionEnabled(
+  action: InstancePowerAction,
+  state?: InstanceState | null,
+): boolean {
+  if (!state) {
+    return false;
+  }
+
+  return ENABLED_POWER_ACTION_STATES[action].includes(state);
+}
+
+function getPowerActionConfirmationMessage(
+  action: InstancePowerAction,
+  instanceName: string,
+): string {
+  if (action === "start") {
+    return `Start ${instanceName}? This will request EC2 to power the instance on.`;
+  }
+
+  if (action === "stop") {
+    return `Stop ${instanceName}? This will request EC2 to power the instance down.`;
+  }
+
+  return `Reboot ${instanceName}? This will request EC2 to restart the guest operating system.`;
+}
+
+function getPowerActionNotice(
+  action: InstancePowerAction,
+  instanceName: string,
+): string {
+  if (action === "start") {
+    return `${instanceName} is starting. Refreshing the latest EC2 state now.`;
+  }
+
+  if (action === "stop") {
+    return `${instanceName} is stopping. Refreshing the latest EC2 state now.`;
+  }
+
+  return `${instanceName} is rebooting. Refreshing the latest EC2 state now.`;
+}
+
 export default function InstanceDetailScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{
@@ -185,12 +284,21 @@ export default function InstanceDetailScreen() {
     useState<CachedCpuHistorySnapshot>(EMPTY_HISTORY_SNAPSHOT);
   const [apiBaseUrl, setCurrentApiBaseUrl] = useState("");
   const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null);
+  const [pendingPowerAction, setPendingPowerAction] =
+    useState<InstancePowerAction | null>(null);
+  const [powerActionError, setPowerActionError] = useState<string | null>(null);
+  const [powerActionNotice, setPowerActionNotice] = useState<string | null>(
+    null,
+  );
+  const [optimisticState, setOptimisticState] = useState<InstanceState | null>(
+    null,
+  );
   const remoteRange = timeRange === "7d" ? "24h" : timeRange;
 
   const displayName =
     monitoring?.name ?? fallbackName ?? instanceId ?? "Instance";
   const displayId = monitoring?.id ?? instanceId ?? "Unknown instance";
-  const displayState = monitoring?.state ?? fallbackState;
+  const displayState = optimisticState ?? monitoring?.state ?? fallbackState;
   const displayType = monitoring?.type ?? fallbackType;
   const displayZone = monitoring?.zone ?? fallbackZone;
   const displayUpdatedAt =
@@ -294,6 +402,7 @@ export default function InstanceDetailScreen() {
         await cacheMonitoringInstance(activeApiBaseUrl, result, remoteRange);
 
         setMonitoring(result);
+        setOptimisticState(null);
         setIsUsingCachedMetrics(false);
         setHistorySnapshot(nextHistorySnapshot);
         setLastRefreshedAt(new Date().toISOString());
@@ -318,6 +427,13 @@ export default function InstanceDetailScreen() {
     },
     [instanceId, loadCachedMonitoring, remoteRange, timeRange],
   );
+
+  useEffect(() => {
+    setPendingPowerAction(null);
+    setPowerActionError(null);
+    setPowerActionNotice(null);
+    setOptimisticState(null);
+  }, [instanceId]);
 
   useEffect(() => {
     if (!instanceId) {
@@ -372,6 +488,73 @@ export default function InstanceDetailScreen() {
   const retryMetricsLoad = useCallback(() => {
     void runRefresh("manual");
   }, [runRefresh]);
+
+  const submitPowerAction = useCallback(
+    async (action: InstancePowerAction) => {
+      if (!instanceId) {
+        return;
+      }
+
+      setPendingPowerAction(action);
+      setPowerActionError(null);
+      setPowerActionNotice(null);
+
+      try {
+        const response = await controlInstancePower(instanceId, action);
+        const nextTimestamp = new Date().toISOString();
+
+        if (response.currentState) {
+          setOptimisticState(response.currentState);
+          setMonitoring((current) =>
+            current
+              ? {
+                  ...current,
+                  state: response.currentState ?? current.state,
+                  updatedAt: nextTimestamp,
+                }
+              : current,
+          );
+        } else {
+          setOptimisticState(null);
+        }
+
+        setPowerActionNotice(getPowerActionNotice(action, displayName));
+        setLastRefreshedAt(nextTimestamp);
+        await runRefresh("manual");
+      } catch (error) {
+        setPowerActionError(
+          error instanceof Error
+            ? error.message
+            : `Couldn't ${action} ${displayName}.`,
+        );
+      } finally {
+        setPendingPowerAction(null);
+      }
+    },
+    [displayName, instanceId, runRefresh],
+  );
+
+  const confirmPowerAction = useCallback(
+    (action: InstancePowerAction) => {
+      const actionCopy = POWER_ACTION_COPY[action];
+
+      Alert.alert(
+        `${actionCopy.label} Instance`,
+        getPowerActionConfirmationMessage(action, displayName),
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: actionCopy.label,
+            onPress: () => {
+              void submitPowerAction(action);
+            },
+            style: action === "stop" ? "destructive" : "default",
+          },
+        ],
+      );
+    },
+    [displayName, submitPowerAction],
+  );
 
   let detailStateCard: React.ReactNode = null;
   if (isLoadingMetrics && !hasLiveMetrics && !hasHistory) {
@@ -555,6 +738,148 @@ export default function InstanceDetailScreen() {
             Last refresh: {formatRefreshTimestamp(lastRefreshedAt)}
           </Text>
         </View>
+      </View>
+
+      <View style={styles.powerActionsCard}>
+        <View style={styles.powerActionsHeader}>
+          <Text style={styles.sectionTitle}>Power Controls</Text>
+          <Text style={styles.powerActionsSubtitle}>
+            {displayState
+              ? `Current EC2 state: ${displayState}. Only valid actions for that state are enabled.`
+              : "Load a live or cached instance state before sending a power request."}
+          </Text>
+        </View>
+
+        <View style={styles.powerActionsList}>
+          {POWER_ACTIONS.map((action) => {
+            const actionCopy = POWER_ACTION_COPY[action];
+            const isActionPending = pendingPowerAction === action;
+            const isActionEnabled = isPowerActionEnabled(action, displayState);
+            const isActionDisabled =
+              !isActionEnabled || pendingPowerAction !== null;
+
+            let availabilityLabel = "Unavailable";
+            if (isActionPending) {
+              availabilityLabel = "Sending";
+            } else if (isActionEnabled && pendingPowerAction) {
+              availabilityLabel = "Waiting";
+            } else if (isActionEnabled) {
+              availabilityLabel = "Available";
+            }
+
+            return (
+              <Pressable
+                key={action}
+                accessibilityHint={actionCopy.description}
+                accessibilityLabel={`${actionCopy.label} instance`}
+                accessibilityRole="button"
+                disabled={isActionDisabled}
+                onPress={() => {
+                  confirmPowerAction(action);
+                }}
+                style={({ pressed }) => [
+                  styles.powerActionButton,
+                  {
+                    backgroundColor: isActionDisabled
+                      ? "#F8FAFC"
+                      : actionCopy.accentBackgroundColor,
+                    borderColor: isActionDisabled
+                      ? "#E2E8F0"
+                      : actionCopy.accentBorderColor,
+                  },
+                  pressed &&
+                    !isActionDisabled &&
+                    styles.powerActionButtonPressed,
+                ]}
+              >
+                <View
+                  style={[
+                    styles.powerActionIconWrap,
+                    isActionDisabled
+                      ? styles.powerActionIconWrapDisabled
+                      : styles.powerActionIconWrapEnabled,
+                  ]}
+                >
+                  {isActionPending ? (
+                    <ActivityIndicator color={actionCopy.accentTextColor} />
+                  ) : (
+                    <MaterialIcons
+                      color={
+                        isActionDisabled
+                          ? "#94A3B8"
+                          : actionCopy.accentTextColor
+                      }
+                      name={actionCopy.icon}
+                      size={20}
+                    />
+                  )}
+                </View>
+
+                <View style={styles.powerActionCopy}>
+                  <View style={styles.powerActionTitleRow}>
+                    <Text
+                      style={[
+                        styles.powerActionTitle,
+                        isActionDisabled && styles.powerActionTitleDisabled,
+                      ]}
+                    >
+                      {isActionPending
+                        ? actionCopy.pendingLabel
+                        : actionCopy.label}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.powerActionAvailability,
+                        isActionDisabled &&
+                          styles.powerActionAvailabilityDisabled,
+                        !isActionDisabled && {
+                          color: actionCopy.accentTextColor,
+                        },
+                      ]}
+                    >
+                      {availabilityLabel}
+                    </Text>
+                  </View>
+                  <Text
+                    style={[
+                      styles.powerActionDescription,
+                      isActionDisabled && styles.powerActionDescriptionDisabled,
+                    ]}
+                  >
+                    {actionCopy.description}
+                  </Text>
+                </View>
+              </Pressable>
+            );
+          })}
+        </View>
+
+        {powerActionNotice ? (
+          <View style={styles.powerActionNotice}>
+            <MaterialIcons
+              color="#166534"
+              name="check-circle-outline"
+              size={18}
+            />
+            <Text style={styles.powerActionNoticeText}>{powerActionNotice}</Text>
+          </View>
+        ) : null}
+
+        {powerActionError ? (
+          <ScreenStateCard
+            compact
+            variant="error"
+            title="Power request failed"
+            message={powerActionError}
+            actions={[
+              {
+                label: "Refresh Status",
+                onPress: retryMetricsLoad,
+                tone: "primary",
+              },
+            ]}
+          />
+        ) : null}
       </View>
 
       {detailStateCard ? (
@@ -863,6 +1188,102 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#E2E8F0",
     gap: 12,
+  },
+  powerActionsCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    gap: 12,
+  },
+  powerActionsHeader: {
+    gap: 4,
+  },
+  powerActionsSubtitle: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: "#475569",
+  },
+  powerActionsList: {
+    gap: 10,
+  },
+  powerActionButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+  },
+  powerActionButtonPressed: {
+    opacity: 0.88,
+  },
+  powerActionIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 999,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  powerActionIconWrapEnabled: {
+    backgroundColor: "#FFFFFF",
+  },
+  powerActionIconWrapDisabled: {
+    backgroundColor: "#E2E8F0",
+  },
+  powerActionCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  powerActionTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  powerActionTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#0F172A",
+  },
+  powerActionTitleDisabled: {
+    color: "#94A3B8",
+  },
+  powerActionAvailability: {
+    fontSize: 11,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+  },
+  powerActionAvailabilityDisabled: {
+    color: "#94A3B8",
+  },
+  powerActionDescription: {
+    fontSize: 13,
+    color: "#475569",
+    lineHeight: 18,
+  },
+  powerActionDescriptionDisabled: {
+    color: "#94A3B8",
+  },
+  powerActionNotice: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#A7F3D0",
+    backgroundColor: "#ECFDF5",
+  },
+  powerActionNoticeText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 19,
+    color: "#166534",
+    fontWeight: "600",
   },
   metricGrid: {
     flexDirection: "row",

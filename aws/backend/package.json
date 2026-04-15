@@ -14,7 +14,7 @@
   "main": "dist/server.cjs",
   "scripts": {
     "test": "cross-env NODE_ENV=test node --test",
-    "start": "npx tsc && node dist/server.js",
+    "start": "npx tsc && node -e \"process.env.RUN_BACKEND_SERVER='true'; import('./dist/server.js')\"",
     "lint": "eslint . --max-warnings=0",
     "lint:fix": "eslint --fix ."
   },
