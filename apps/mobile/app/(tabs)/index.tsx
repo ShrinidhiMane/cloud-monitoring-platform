@@ -1,5 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
+import {
+  FlatList,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 import { useRouter } from "expo-router";
 
 import { InstanceCard } from "@/components/InstanceCard";
@@ -8,10 +15,18 @@ import { useAutoRefresh, type RefreshReason } from "@/hooks/use-auto-refresh";
 import { buildInstanceDetailRoute, SETTINGS_ROUTE } from "@/navigation/routes";
 import { hydrateApiBaseUrl } from "@/services/apiBaseUrl";
 import {
+  readFavoriteInstanceIds,
+  toggleFavoriteInstance,
+} from "@/services/favoriteInstances";
+import {
   cacheMonitoringOverview,
   readCachedMonitoringOverview,
 } from "@/services/monitoringCache";
-import type { MonitoringResponse, MonitoringInstance } from "api-client";
+import type {
+  InstanceState,
+  MonitoringInstance,
+  MonitoringResponse,
+} from "api-client";
 import { fetchMonitoringOverview } from "api-client";
 
 const POLL_INTERVAL_MS = 30_000;
@@ -20,6 +35,22 @@ const STATUS_TIMESTAMP_FORMATTER = new Intl.DateTimeFormat("en-US", {
   minute: "2-digit",
   second: "2-digit",
 });
+const OTHER_INSTANCE_STATES: InstanceState[] = [
+  "pending",
+  "stopping",
+  "shutting-down",
+  "terminated",
+  "unknown",
+];
+
+type InstanceFilter = "all" | "running" | "stopped" | "other";
+
+const FILTER_OPTIONS: Array<{ label: string; value: InstanceFilter }> = [
+  { label: "All", value: "all" },
+  { label: "Running", value: "running" },
+  { label: "Stopped", value: "stopped" },
+  { label: "Other", value: "other" },
+];
 
 function ItemSeparator() {
   return <View style={styles.separator} />;
@@ -38,15 +69,67 @@ function formatStatusTimestamp(timestamp?: string | null): string {
   return STATUS_TIMESTAMP_FORMATTER.format(parsedTimestamp);
 }
 
+function matchesStateFilter(
+  instance: MonitoringInstance,
+  filter: InstanceFilter,
+): boolean {
+  if (filter === "all") {
+    return true;
+  }
+
+  if (filter === "other") {
+    return OTHER_INSTANCE_STATES.includes(instance.state);
+  }
+
+  return instance.state === filter;
+}
+
+function matchesSearchQuery(
+  instance: MonitoringInstance,
+  searchQuery: string,
+): boolean {
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return true;
+  }
+
+  return [
+    instance.name,
+    instance.id,
+    instance.type,
+    instance.zone ?? "",
+    instance.state,
+  ].some((value) => value.toLowerCase().includes(normalizedQuery));
+}
+
+function compareInstances(
+  left: MonitoringInstance,
+  right: MonitoringInstance,
+  favoriteIds: Set<string>,
+): number {
+  const leftFavoriteScore = favoriteIds.has(left.id) ? 1 : 0;
+  const rightFavoriteScore = favoriteIds.has(right.id) ? 1 : 0;
+
+  if (leftFavoriteScore !== rightFavoriteScore) {
+    return rightFavoriteScore - leftFavoriteScore;
+  }
+
+  return left.name.localeCompare(right.name);
+}
+
 export default function InstancesScreen() {
   const router = useRouter();
   const [instances, setInstances] = useState<MonitoringInstance[]>([]);
+  const [favoriteIds, setFavoriteIds] = useState<string[]>([]);
   const [activeApiBaseUrl, setActiveApiBaseUrl] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isUsingCachedData, setIsUsingCachedData] = useState(false);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [stateFilter, setStateFilter] = useState<InstanceFilter>("all");
+  const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
   const [statusMessage, setStatusMessage] = useState(
     "Loading live monitoring data...",
   );
@@ -61,6 +144,14 @@ export default function InstancesScreen() {
   useEffect(() => {
     activeApiBaseUrlRef.current = activeApiBaseUrl;
   }, [activeApiBaseUrl]);
+
+  const loadFavoriteIds = useCallback(async () => {
+    setFavoriteIds(await readFavoriteInstanceIds());
+  }, []);
+
+  useEffect(() => {
+    void loadFavoriteIds();
+  }, [loadFavoriteIds]);
 
   const loadCachedOverview = useCallback(async (apiBaseUrl: string) => {
     const cachedOverview = await readCachedMonitoringOverview(apiBaseUrl);
@@ -116,7 +207,7 @@ export default function InstancesScreen() {
     return () => {
       isMounted = false;
     };
-  }, [loadCachedOverview]);
+  }, []);
 
   const loadInstances = useCallback(
     async (reason: RefreshReason) => {
@@ -137,11 +228,13 @@ export default function InstancesScreen() {
           setIsUsingCachedData(false);
         }
       }
+
       if (hasExistingInstances) {
         setIsRefreshing(true);
       } else {
         setIsLoading(true);
       }
+
       setStatusMessage(
         reason === "auto" && hasExistingInstances
           ? `Auto-refreshing live metrics from ${apiBaseUrl}...`
@@ -169,7 +262,7 @@ export default function InstancesScreen() {
           );
         } else {
           setStatusMessage(
-            `Connected to ${apiBaseUrl}. The screen will keep checking every 30 seconds, but no running instances were returned.`,
+            `Connected to ${apiBaseUrl}. The screen will keep checking every 30 seconds, but no instances were returned.`,
           );
         }
       } catch {
@@ -189,6 +282,7 @@ export default function InstancesScreen() {
     },
     [isUsingCachedData, loadCachedOverview],
   );
+
   const { isAutoRefreshing, runRefresh } = useAutoRefresh({
     intervalMs: POLL_INTERVAL_MS,
     onRefresh: loadInstances,
@@ -202,7 +296,40 @@ export default function InstancesScreen() {
     router.push(SETTINGS_ROUTE);
   }, [router]);
 
+  const handleToggleFavorite = useCallback(async (instanceId: string) => {
+    setFavoriteIds(await toggleFavoriteInstance(instanceId));
+  }, []);
+
+  const handleClearFilters = useCallback(() => {
+    setSearchQuery("");
+    setStateFilter("all");
+    setShowFavoritesOnly(false);
+  }, []);
+
+  const favoriteIdSet = new Set(favoriteIds);
+  const filteredInstances = [...instances]
+    .filter((instance) => {
+      if (showFavoritesOnly && !favoriteIdSet.has(instance.id)) {
+        return false;
+      }
+
+      return (
+        matchesStateFilter(instance, stateFilter) &&
+        matchesSearchQuery(instance, searchQuery)
+      );
+    })
+    .sort((left, right) => compareInstances(left, right, favoriteIdSet));
   const hasInstances = instances.length > 0;
+  const hasFilteredInstances = filteredInstances.length > 0;
+  const runningCount = instances.filter(
+    (instance) => instance.state === "running",
+  ).length;
+  const stoppedCount = instances.filter(
+    (instance) => instance.state === "stopped",
+  ).length;
+  const favoriteCount = instances.filter((instance) =>
+    favoriteIdSet.has(instance.id),
+  ).length;
   const shouldShowStatusCard =
     hasInstances || isRefreshing || isAutoRefreshing || lastUpdatedAt !== null;
 
@@ -225,17 +352,123 @@ export default function InstancesScreen() {
         pressed && styles.cardPressed,
       ]}
     >
-      <InstanceCard instance={item} />
+      <InstanceCard
+        instance={item}
+        isFavorite={favoriteIdSet.has(item.id)}
+        onToggleFavorite={handleToggleFavorite}
+      />
     </Pressable>
   );
 
   const renderHeader = () => (
     <View style={styles.header}>
       <Text style={styles.title}>Instances</Text>
-      <Text style={styles.subtitle}>EC2 name, IDs, state, and type</Text>
+      <Text style={styles.subtitle}>
+        Search, filter, and pin EC2 instances you care about most.
+      </Text>
+
+      <View style={styles.summaryGrid}>
+        <View style={styles.summaryTile}>
+          <Text style={styles.summaryValue}>{instances.length}</Text>
+          <Text style={styles.summaryLabel}>Total</Text>
+        </View>
+        <View style={styles.summaryTile}>
+          <Text style={styles.summaryValue}>{runningCount}</Text>
+          <Text style={styles.summaryLabel}>Running</Text>
+        </View>
+        <View style={styles.summaryTile}>
+          <Text style={styles.summaryValue}>{stoppedCount}</Text>
+          <Text style={styles.summaryLabel}>Stopped</Text>
+        </View>
+        <View style={styles.summaryTile}>
+          <Text style={styles.summaryValue}>{favoriteCount}</Text>
+          <Text style={styles.summaryLabel}>Favorites</Text>
+        </View>
+      </View>
+
+      <View style={styles.searchCard}>
+        <TextInput
+          autoCapitalize="none"
+          autoCorrect={false}
+          onChangeText={setSearchQuery}
+          placeholder="Search by name, ID, type, zone, or state"
+          placeholderTextColor="#94A3B8"
+          style={styles.searchInput}
+          value={searchQuery}
+        />
+
+        <View style={styles.filterRow}>
+          {FILTER_OPTIONS.map((option) => {
+            const isSelected = stateFilter === option.value;
+
+            return (
+              <Pressable
+                key={option.value}
+                accessibilityRole="button"
+                onPress={() => {
+                  setStateFilter(option.value);
+                }}
+                style={({ pressed }) => [
+                  styles.filterChip,
+                  isSelected && styles.filterChipSelected,
+                  pressed && styles.filterChipPressed,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.filterChipText,
+                    isSelected && styles.filterChipTextSelected,
+                  ]}
+                >
+                  {option.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => {
+              setShowFavoritesOnly((current) => !current);
+            }}
+            style={({ pressed }) => [
+              styles.filterChip,
+              showFavoritesOnly && styles.favoriteChipSelected,
+              pressed && styles.filterChipPressed,
+            ]}
+          >
+            <Text
+              style={[
+                styles.filterChipText,
+                showFavoritesOnly && styles.favoriteChipTextSelected,
+              ]}
+            >
+              Favorites
+            </Text>
+          </Pressable>
+
+          {(searchQuery || stateFilter !== "all" || showFavoritesOnly) && (
+            <Pressable
+              accessibilityRole="button"
+              onPress={handleClearFilters}
+              style={({ pressed }) => [
+                styles.clearChip,
+                pressed && styles.filterChipPressed,
+              ]}
+            >
+              <Text style={styles.clearChipText}>Clear</Text>
+            </Pressable>
+          )}
+        </View>
+
+        <Text style={styles.filterSummaryText}>
+          Showing {filteredInstances.length} of {instances.length} instances
+        </Text>
+      </View>
+
       {shouldShowStatusCard ? (
         <View
-          style={[styles.statusCard, errorMessage && styles.statusCardError]}
+          style={[styles.refreshCard, errorMessage && styles.refreshCardError]}
         >
           <Text
             style={[styles.statusText, errorMessage && styles.statusTextError]}
@@ -295,7 +528,7 @@ export default function InstancesScreen() {
       return (
         <ScreenStateCard
           variant="error"
-          title="Couldn’t load instances"
+          title="Couldn't load instances"
           message={errorMessage}
           actions={[
             { label: "Try Again", onPress: handleRetry, tone: "primary" },
@@ -305,10 +538,27 @@ export default function InstancesScreen() {
       );
     }
 
+    if (hasInstances && !hasFilteredInstances) {
+      return (
+        <ScreenStateCard
+          variant="empty"
+          title="No matches for these filters"
+          message="Try a different search term or clear the current filters to see more EC2 instances."
+          actions={[
+            {
+              label: "Clear Filters",
+              onPress: handleClearFilters,
+              tone: "primary",
+            },
+          ]}
+        />
+      );
+    }
+
     return (
       <ScreenStateCard
         variant="empty"
-        title="No running instances"
+        title="No instances returned"
         message="The monitoring endpoint responded, but there are no EC2 instances to show right now. This screen will keep checking automatically every 30 seconds."
         actions={[{ label: "Refresh", onPress: handleRetry, tone: "primary" }]}
       />
@@ -317,14 +567,14 @@ export default function InstancesScreen() {
 
   return (
     <FlatList
-      data={instances}
+      data={filteredInstances}
       keyExtractor={(item) => item.id}
       renderItem={renderItem}
       ListHeaderComponent={renderHeader()}
       ListEmptyComponent={renderEmptyState}
       contentContainerStyle={[
         styles.listContent,
-        !hasInstances && styles.listContentEmpty,
+        !hasFilteredInstances && styles.listContentEmpty,
       ]}
       ItemSeparatorComponent={ItemSeparator}
       onRefresh={handleRetry}
@@ -344,6 +594,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 20,
     paddingBottom: 12,
+    gap: 12,
   },
   title: {
     fontSize: 24,
@@ -352,11 +603,105 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     fontSize: 14,
-    marginTop: 6,
     color: "#475569",
   },
-  statusCard: {
-    marginTop: 12,
+  summaryGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+  },
+  summaryTile: {
+    width: "47%",
+    borderRadius: 16,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    gap: 4,
+  },
+  summaryValue: {
+    fontSize: 24,
+    fontWeight: "800",
+    color: "#0F172A",
+  },
+  summaryLabel: {
+    fontSize: 12,
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+    color: "#64748B",
+  },
+  searchCard: {
+    borderRadius: 16,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    padding: 14,
+    gap: 12,
+  },
+  searchInput: {
+    minHeight: 46,
+    borderRadius: 12,
+    backgroundColor: "#F8FAFC",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    paddingHorizontal: 14,
+    fontSize: 14,
+    color: "#0F172A",
+  },
+  filterRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  filterChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: "#F8FAFC",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  filterChipSelected: {
+    backgroundColor: "#DBEAFE",
+    borderColor: "#93C5FD",
+  },
+  favoriteChipSelected: {
+    backgroundColor: "#FFFBEB",
+    borderColor: "#FDE68A",
+  },
+  filterChipPressed: {
+    opacity: 0.88,
+  },
+  filterChipText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#334155",
+  },
+  filterChipTextSelected: {
+    color: "#1D4ED8",
+  },
+  favoriteChipTextSelected: {
+    color: "#B45309",
+  },
+  clearChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#CBD5E1",
+  },
+  clearChipText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#475569",
+  },
+  filterSummaryText: {
+    fontSize: 12,
+    color: "#64748B",
+  },
+  refreshCard: {
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderRadius: 12,
@@ -364,7 +709,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#A7F3D0",
   },
-  statusCardError: {
+  refreshCardError: {
     backgroundColor: "#FEF2F2",
     borderColor: "#FECACA",
   },
@@ -422,7 +767,6 @@ const styles = StyleSheet.create({
   },
   listContent: {
     paddingHorizontal: 20,
-    paddingTop: 20,
     paddingBottom: 24,
   },
   listContentEmpty: {

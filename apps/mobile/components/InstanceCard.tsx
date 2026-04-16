@@ -1,5 +1,6 @@
 import React from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
+import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import type { InstanceState, MonitoringInstance } from "api-client";
 
 import { InstanceMetricsGrid } from "@/components/InstanceMetricsGrid";
@@ -16,9 +17,15 @@ const STATE_COLORS: Record<InstanceState, { bg: string; text: string }> = {
 
 interface InstanceCardProps {
   instance: MonitoringInstance;
+  isFavorite?: boolean;
+  onToggleFavorite?: (instanceId: string) => void;
 }
 
-export function InstanceCard({ instance }: InstanceCardProps) {
+export function InstanceCard({
+  instance,
+  isFavorite = false,
+  onToggleFavorite,
+}: InstanceCardProps) {
   const stateStyle = STATE_COLORS[instance.state];
   const snapshot = {
     cpuUtilization: instance.cpuPercent,
@@ -33,13 +40,44 @@ export function InstanceCard({ instance }: InstanceCardProps) {
     <View style={styles.card}>
       <View style={styles.headerRow}>
         <Text style={styles.name}>{instance.name}</Text>
-        <View
-          style={[styles.statePill, { backgroundColor: stateStyle.bg }]}
-          accessibilityLabel={`Instance state ${instance.state}`}
-        >
-          <Text style={[styles.stateText, { color: stateStyle.text }]}>
-            {instance.state}
-          </Text>
+        <View style={styles.headerActions}>
+          {onToggleFavorite ? (
+            <Pressable
+              accessibilityHint={
+                isFavorite
+                  ? "Removes this instance from favorites"
+                  : "Adds this instance to favorites"
+              }
+              accessibilityLabel={
+                isFavorite ? "Remove favorite" : "Add favorite"
+              }
+              accessibilityRole="button"
+              hitSlop={10}
+              onPress={(event) => {
+                event.stopPropagation();
+                onToggleFavorite(instance.id);
+              }}
+              style={({ pressed }) => [
+                styles.favoriteButton,
+                isFavorite && styles.favoriteButtonActive,
+                pressed && styles.favoriteButtonPressed,
+              ]}
+            >
+              <MaterialCommunityIcons
+                color={isFavorite ? "#D97706" : "#64748B"}
+                name={isFavorite ? "star" : "star-outline"}
+                size={18}
+              />
+            </Pressable>
+          ) : null}
+          <View
+            style={[styles.statePill, { backgroundColor: stateStyle.bg }]}
+            accessibilityLabel={`Instance state ${instance.state}`}
+          >
+            <Text style={[styles.stateText, { color: stateStyle.text }]}>
+              {instance.state}
+            </Text>
+          </View>
         </View>
       </View>
 
@@ -80,11 +118,33 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     gap: 12,
   },
+  headerActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
   name: {
     fontSize: 16,
     fontWeight: "600",
     color: "#0F172A",
     flexShrink: 1,
+  },
+  favoriteButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 999,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#F8FAFC",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  favoriteButtonActive: {
+    backgroundColor: "#FFFBEB",
+    borderColor: "#FDE68A",
+  },
+  favoriteButtonPressed: {
+    opacity: 0.85,
   },
   statePill: {
     paddingHorizontal: 10,
