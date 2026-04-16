@@ -27,6 +27,7 @@ export function InstanceCard({
   onToggleFavorite,
 }: InstanceCardProps) {
   const stateStyle = STATE_COLORS[instance.state];
+  const zoneValue = instance.zone?.trim() || "No zone";
   const snapshot = {
     cpuUtilization: instance.cpuPercent,
     memoryUtilization: instance.memoryPercent,
@@ -39,7 +40,14 @@ export function InstanceCard({
   return (
     <View style={styles.card}>
       <View style={styles.headerRow}>
-        <Text style={styles.name}>{instance.name}</Text>
+        <View style={styles.titleBlock}>
+          <Text numberOfLines={1} style={styles.name}>
+            {instance.name}
+          </Text>
+          <Text numberOfLines={1} style={styles.instanceId}>
+            {instance.id}
+          </Text>
+        </View>
         <View style={styles.headerActions}>
           {onToggleFavorite ? (
             <Pressable
@@ -81,17 +89,22 @@ export function InstanceCard({
         </View>
       </View>
 
-      <View style={styles.detailRow}>
-        <Text style={styles.label}>ID</Text>
-        <Text style={styles.value}>{instance.id}</Text>
-      </View>
-      <View style={styles.detailRow}>
-        <Text style={styles.label}>Type</Text>
-        <Text style={styles.value}>{instance.type}</Text>
+      <View style={styles.metaRow}>
+        <View style={styles.metaPill}>
+          <Text style={styles.metaLabel}>Type</Text>
+          <Text style={styles.metaValue}>{instance.type}</Text>
+        </View>
+        <View style={styles.metaPill}>
+          <Text style={styles.metaLabel}>Zone</Text>
+          <Text style={styles.metaValue}>{zoneValue}</Text>
+        </View>
       </View>
 
       <View style={styles.metricsSection}>
-        <Text style={styles.metricsTitle}>Live Snapshot</Text>
+        <View style={styles.metricsHeader}>
+          <Text style={styles.metricsTitle}>Live Snapshot</Text>
+          <Text style={styles.metricsCaption}>CPU, memory, network, disk</Text>
+        </View>
         <InstanceMetricsGrid metrics={snapshot} compact />
       </View>
     </View>
@@ -101,22 +114,26 @@ export function InstanceCard({
 const styles = StyleSheet.create({
   card: {
     backgroundColor: "#FFFFFF",
-    borderRadius: 16,
+    borderRadius: 22,
     padding: 16,
     borderWidth: 1,
-    borderColor: "#E5E7EB",
+    borderColor: "#E2E8F0",
     shadowColor: "#0F172A",
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
     elevation: 2,
   },
   headerRow: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     justifyContent: "space-between",
-    marginBottom: 12,
+    marginBottom: 14,
     gap: 12,
+  },
+  titleBlock: {
+    flex: 1,
+    gap: 4,
   },
   headerActions: {
     flexDirection: "row",
@@ -124,10 +141,13 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   name: {
-    fontSize: 16,
-    fontWeight: "600",
+    fontSize: 18,
+    fontWeight: "700",
     color: "#0F172A",
-    flexShrink: 1,
+  },
+  instanceId: {
+    fontSize: 12,
+    color: "#64748B",
   },
   favoriteButton: {
     width: 34,
@@ -148,34 +168,51 @@ const styles = StyleSheet.create({
   },
   statePill: {
     paddingHorizontal: 10,
-    paddingVertical: 4,
+    paddingVertical: 5,
     borderRadius: 999,
   },
   stateText: {
     fontSize: 12,
-    fontWeight: "600",
+    fontWeight: "700",
     textTransform: "capitalize",
   },
-  detailRow: {
+  metaRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginTop: 6,
+    gap: 10,
   },
-  label: {
+  metaPill: {
+    flex: 1,
+    borderRadius: 14,
+    backgroundColor: "#F8FAFC",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 4,
+  },
+  metaLabel: {
     fontSize: 12,
     color: "#6B7280",
     textTransform: "uppercase",
     letterSpacing: 0.6,
   },
-  value: {
+  metaValue: {
     fontSize: 13,
     color: "#0F172A",
-    fontWeight: "500",
+    fontWeight: "700",
   },
   metricsSection: {
     marginTop: 14,
-    gap: 10,
+    gap: 12,
+    paddingTop: 14,
+    borderTopWidth: 1,
+    borderTopColor: "#EEF2F7",
+  },
+  metricsHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
   },
   metricsTitle: {
     fontSize: 12,
@@ -183,5 +220,9 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
     textTransform: "uppercase",
     color: "#334155",
+  },
+  metricsCaption: {
+    fontSize: 12,
+    color: "#94A3B8",
   },
 });

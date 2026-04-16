@@ -8,6 +8,8 @@ import {
   View,
 } from "react-native";
 import { useRouter } from "expo-router";
+import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
+import { useFocusEffect } from "@react-navigation/native";
 
 import { InstanceCard } from "@/components/InstanceCard";
 import { ScreenStateCard } from "@/components/ScreenStateCard";
@@ -51,6 +53,24 @@ const FILTER_OPTIONS: Array<{ label: string; value: InstanceFilter }> = [
   { label: "Stopped", value: "stopped" },
   { label: "Other", value: "other" },
 ];
+
+const SUMMARY_ITEMS: Array<{
+  icon: React.ComponentProps<typeof MaterialCommunityIcons>["name"];
+  label: string;
+  tone: "slate" | "green" | "amber" | "gold";
+}> = [
+  { icon: "server-outline", label: "Total", tone: "slate" },
+  { icon: "play-circle-outline", label: "Running", tone: "green" },
+  { icon: "pause-circle-outline", label: "Stopped", tone: "amber" },
+  { icon: "star-outline", label: "Favorites", tone: "gold" },
+];
+
+const SUMMARY_TONES = {
+  slate: { background: "#EEF2F7", icon: "#334155" },
+  green: { background: "#EAFBF2", icon: "#15803D" },
+  amber: { background: "#FFF7E8", icon: "#B45309" },
+  gold: { background: "#FFF8DB", icon: "#B7791F" },
+} as const;
 
 function ItemSeparator() {
   return <View style={styles.separator} />;
@@ -288,6 +308,13 @@ export default function InstancesScreen() {
     onRefresh: loadInstances,
   });
 
+  useFocusEffect(
+    useCallback(() => {
+      void loadFavoriteIds();
+      void runRefresh("manual");
+    }, [loadFavoriteIds, runRefresh]),
+  );
+
   const handleRetry = useCallback(() => {
     void runRefresh("manual");
   }, [runRefresh]);
@@ -332,6 +359,7 @@ export default function InstancesScreen() {
   ).length;
   const shouldShowStatusCard =
     hasInstances || isRefreshing || isAutoRefreshing || lastUpdatedAt !== null;
+  const summaryValues = [instances.length, runningCount, stoppedCount, favoriteCount];
 
   const renderItem = ({ item }: { item: MonitoringInstance }) => (
     <Pressable
@@ -362,40 +390,58 @@ export default function InstancesScreen() {
 
   const renderHeader = () => (
     <View style={styles.header}>
-      <Text style={styles.title}>Instances</Text>
-      <Text style={styles.subtitle}>
-        Search, filter, and pin EC2 instances you care about most.
-      </Text>
-
-      <View style={styles.summaryGrid}>
-        <View style={styles.summaryTile}>
-          <Text style={styles.summaryValue}>{instances.length}</Text>
-          <Text style={styles.summaryLabel}>Total</Text>
-        </View>
-        <View style={styles.summaryTile}>
-          <Text style={styles.summaryValue}>{runningCount}</Text>
-          <Text style={styles.summaryLabel}>Running</Text>
-        </View>
-        <View style={styles.summaryTile}>
-          <Text style={styles.summaryValue}>{stoppedCount}</Text>
-          <Text style={styles.summaryLabel}>Stopped</Text>
-        </View>
-        <View style={styles.summaryTile}>
-          <Text style={styles.summaryValue}>{favoriteCount}</Text>
-          <Text style={styles.summaryLabel}>Favorites</Text>
-        </View>
+      <View style={styles.heroCard}>
+        <Text style={styles.eyebrow}>EC2 Fleet</Text>
+        <Text style={styles.title}>Instances</Text>
+        <Text style={styles.subtitle}>
+          Search, filter, and pin the machines you actually care about.
+        </Text>
       </View>
 
-      <View style={styles.searchCard}>
-        <TextInput
-          autoCapitalize="none"
-          autoCorrect={false}
-          onChangeText={setSearchQuery}
-          placeholder="Search by name, ID, type, zone, or state"
-          placeholderTextColor="#94A3B8"
-          style={styles.searchInput}
-          value={searchQuery}
-        />
+      <View style={styles.summaryGrid}>
+        {SUMMARY_ITEMS.map((item, index) => {
+          const tone = SUMMARY_TONES[item.tone];
+
+          return (
+            <View key={item.label} style={styles.summaryTile}>
+              <View
+                style={[
+                  styles.summaryIconWrap,
+                  { backgroundColor: tone.background },
+                ]}
+              >
+                <MaterialCommunityIcons
+                  color={tone.icon}
+                  name={item.icon}
+                  size={18}
+                />
+              </View>
+              <View style={styles.summaryCopy}>
+                <Text style={styles.summaryValue}>{summaryValues[index]}</Text>
+                <Text style={styles.summaryLabel}>{item.label}</Text>
+              </View>
+            </View>
+          );
+        })}
+      </View>
+
+      <View style={styles.controlsCard}>
+        <View style={styles.searchInputWrap}>
+          <MaterialCommunityIcons
+            color="#64748B"
+            name="magnify"
+            size={18}
+          />
+          <TextInput
+            autoCapitalize="none"
+            autoCorrect={false}
+            onChangeText={setSearchQuery}
+            placeholder="Search by name, ID, type, zone, or state"
+            placeholderTextColor="#94A3B8"
+            style={styles.searchInput}
+            value={searchQuery}
+          />
+        </View>
 
         <View style={styles.filterRow}>
           {FILTER_OPTIONS.map((option) => {
@@ -588,40 +634,73 @@ export default function InstancesScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: "#F8FAFC",
+    backgroundColor: "#F3F6FB",
   },
   header: {
-    paddingHorizontal: 20,
     paddingTop: 20,
-    paddingBottom: 12,
-    gap: 12,
+    paddingBottom: 16,
+    gap: 14,
+  },
+  heroCard: {
+    borderRadius: 24,
+    paddingHorizontal: 18,
+    paddingVertical: 18,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    shadowColor: "#0F172A",
+    shadowOpacity: 0.05,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 2,
+  },
+  eyebrow: {
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 1,
+    textTransform: "uppercase",
+    color: "#2563EB",
   },
   title: {
-    fontSize: 24,
-    fontWeight: "700",
+    marginTop: 6,
+    fontSize: 30,
+    fontWeight: "800",
     color: "#0F172A",
   },
   subtitle: {
+    marginTop: 6,
     fontSize: 14,
+    lineHeight: 21,
     color: "#475569",
   },
   summaryGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 10,
+    gap: 12,
   },
   summaryTile: {
-    width: "47%",
-    borderRadius: 16,
+    width: "48%",
+    borderRadius: 18,
     backgroundColor: "#FFFFFF",
     borderWidth: 1,
     borderColor: "#E2E8F0",
     paddingHorizontal: 14,
     paddingVertical: 14,
+    minHeight: 104,
+    justifyContent: "space-between",
+  },
+  summaryIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  summaryCopy: {
     gap: 4,
   },
   summaryValue: {
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: "800",
     color: "#0F172A",
   },
@@ -631,21 +710,28 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
     color: "#64748B",
   },
-  searchCard: {
-    borderRadius: 16,
+  controlsCard: {
+    borderRadius: 22,
     backgroundColor: "#FFFFFF",
     borderWidth: 1,
     borderColor: "#E2E8F0",
     padding: 14,
     gap: 12,
   },
-  searchInput: {
-    minHeight: 46,
-    borderRadius: 12,
+  searchInputWrap: {
+    minHeight: 48,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    borderRadius: 14,
     backgroundColor: "#F8FAFC",
     borderWidth: 1,
     borderColor: "#E2E8F0",
     paddingHorizontal: 14,
+  },
+  searchInput: {
+    flex: 1,
+    minHeight: 46,
     fontSize: 14,
     color: "#0F172A",
   },
@@ -655,20 +741,20 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   filterChip: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingHorizontal: 13,
+    paddingVertical: 9,
     borderRadius: 999,
-    backgroundColor: "#F8FAFC",
+    backgroundColor: "#FFFFFF",
     borderWidth: 1,
     borderColor: "#E2E8F0",
   },
   filterChipSelected: {
-    backgroundColor: "#DBEAFE",
-    borderColor: "#93C5FD",
+    backgroundColor: "#EEF4FF",
+    borderColor: "#BFD3FF",
   },
   favoriteChipSelected: {
-    backgroundColor: "#FFFBEB",
-    borderColor: "#FDE68A",
+    backgroundColor: "#FFF8E1",
+    borderColor: "#F3D58A",
   },
   filterChipPressed: {
     opacity: 0.88,
@@ -685,10 +771,10 @@ const styles = StyleSheet.create({
     color: "#B45309",
   },
   clearChip: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingHorizontal: 13,
+    paddingVertical: 9,
     borderRadius: 999,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: "#F8FAFC",
     borderWidth: 1,
     borderColor: "#CBD5E1",
   },
@@ -702,20 +788,21 @@ const styles = StyleSheet.create({
     color: "#64748B",
   },
   refreshCard: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 12,
-    backgroundColor: "#ECFDF5",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 18,
+    backgroundColor: "#F3FBF7",
     borderWidth: 1,
-    borderColor: "#A7F3D0",
+    borderColor: "#C5EFD7",
   },
   refreshCardError: {
-    backgroundColor: "#FEF2F2",
-    borderColor: "#FECACA",
+    backgroundColor: "#FFF5F5",
+    borderColor: "#F8D1D1",
   },
   statusText: {
-    fontSize: 12,
-    color: "#065F46",
+    fontSize: 13,
+    lineHeight: 19,
+    color: "#166534",
   },
   statusTextError: {
     color: "#991B1B",
@@ -733,6 +820,8 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 999,
     backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
   },
   liveDot: {
     width: 8,
