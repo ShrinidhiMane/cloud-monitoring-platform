@@ -1,5 +1,6 @@
 import { useEffect } from "react";
-import { Link, Outlet, useLocation } from "react-router-dom";
+import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { useWebEndpointSession } from "../providers/WebEndpointSessionProvider";
 
 type ShellView = "fleet" | "alerts" | "activity";
 
@@ -40,10 +41,10 @@ function getShellContext(pathname: string, view: ShellView) {
   if (pathname === "/login") {
     return {
       eyebrow: "Access",
-      title: "Operator Sign In",
+      title: "Session Endpoint Access",
       subtitle:
-        "Authenticate before taking any control-plane action or reviewing protected infrastructure data.",
-      actions: [{ label: "Browse Fleet", to: "/instances", primary: true }],
+        "The web console does not use device-local auth. Enter the monitoring endpoint each time you open a session.",
+      actions: [{ label: "Enter Endpoint", to: "/login", primary: true }],
     };
   }
 
@@ -109,10 +110,17 @@ function isNavItemActive(
   return activeView === itemView;
 }
 
-export default function Layout() {
+export default function Layout({
+  accessMode = "private",
+}: {
+  accessMode?: "private" | "public";
+}) {
   const location = useLocation();
+  const navigate = useNavigate();
+  const { clearEndpoint, endpointLabel } = useWebEndpointSession();
   const activeView = getShellView(location.search);
   const shellContext = getShellContext(location.pathname, activeView);
+  const isPublicAccessMode = accessMode === "public";
 
   useEffect(() => {
     if (!location.hash) {
@@ -130,6 +138,11 @@ export default function Layout() {
     };
   }, [location.hash, location.pathname, location.search]);
 
+  function handleChangeEndpoint(): void {
+    clearEndpoint();
+    navigate("/login", { replace: true });
+  }
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -141,30 +154,58 @@ export default function Layout() {
           </div>
         </div>
         <nav className="topnav" aria-label="Primary">
-          {navItems.map((item) => (
-            <Link
-              key={item.label}
-              to={item.to}
-              className={`nav-link${
-                isNavItemActive(location.pathname, activeView, item.view)
-                  ? " active"
-                  : ""
-              }`}
-            >
-              {item.label}
-            </Link>
-          ))}
+          {isPublicAccessMode ? (
+            <span className="nav-link session-mode-pill">
+              Endpoint required each session
+            </span>
+          ) : (
+            navItems.map((item) => (
+              <Link
+                key={item.label}
+                to={item.to}
+                className={`nav-link${
+                  isNavItemActive(location.pathname, activeView, item.view)
+                    ? " active"
+                    : ""
+                }`}
+              >
+                {item.label}
+              </Link>
+            ))
+          )}
         </nav>
-        <div className="meta">
-          <div className="meta-item">
-            <span className="meta-label">Region</span>
-            <span className="meta-value">us-east-1</span>
+        {isPublicAccessMode ? (
+          <div className="meta">
+            <div className="meta-item">
+              <span className="meta-label">Access</span>
+              <span className="meta-value">Endpoint gate</span>
+            </div>
+            <div className="meta-item">
+              <span className="meta-label">Storage</span>
+              <span className="meta-value">Session only</span>
+            </div>
           </div>
-          <div className="meta-item">
-            <span className="meta-label">Env</span>
-            <span className="meta-value">Staging</span>
+        ) : (
+          <div className="meta">
+            <div className="meta-item">
+              <span className="meta-label">Endpoint</span>
+              <span className="meta-value meta-value-wide">
+                {endpointLabel ?? "Not connected"}
+              </span>
+            </div>
+            <div className="meta-item">
+              <span className="meta-label">Session</span>
+              <span className="meta-value">Current tab only</span>
+            </div>
+            <button
+              className="btn ghost shell-session-button"
+              onClick={handleChangeEndpoint}
+              type="button"
+            >
+              Change Endpoint
+            </button>
           </div>
-        </div>
+        )}
       </header>
       <section className="shell-banner">
         <div className="shell-copy">

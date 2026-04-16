@@ -78,9 +78,18 @@
   box-shadow: 0 10px 25px rgba(31, 24, 13, 0.08);
 }
 
+.session-mode-pill {
+  background: rgba(255, 255, 255, 0.72);
+  border-color: var(--border);
+  color: var(--ink);
+  font-weight: 600;
+}
+
 .meta {
   display: flex;
   gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
 }
 
 .meta-item {
@@ -103,6 +112,11 @@
 
 .meta-value {
   font-weight: 600;
+}
+
+.meta-value-wide {
+  max-width: 240px;
+  overflow-wrap: anywhere;
 }
 
 .shell-banner {
@@ -259,6 +273,10 @@
 
 .btn:hover {
   transform: translateY(-1px);
+}
+
+.shell-session-button {
+  white-space: nowrap;
 }
 
 .live-pill {
@@ -695,37 +713,205 @@
   gap: 10px;
 }
 
-.login-shell {
+.endpoint-access-page {
+  margin-top: 28px;
+}
+
+.endpoint-access-shell {
   display: grid;
-  place-items: center;
+  grid-template-columns: minmax(0, 1.1fr) minmax(340px, 430px);
+  gap: 24px;
+  align-items: stretch;
 }
 
-.login-card {
-  width: min(420px, 100%);
-  padding: 28px;
-  border-radius: 20px;
-  background: var(--card);
-  border: 1px solid var(--border);
+.endpoint-access-rail,
+.endpoint-access-card {
+  border-radius: 28px;
+  border: 1px solid rgba(27, 26, 23, 0.08);
   box-shadow: var(--shadow);
-  animation: fade-up 0.6s ease both;
 }
 
-.form-field {
+.endpoint-access-rail {
+  padding: 32px;
+  background:
+    radial-gradient(540px 260px at 20% 0%, rgba(28, 139, 122, 0.18), transparent 65%),
+    linear-gradient(160deg, rgba(255, 255, 255, 0.78), rgba(255, 248, 238, 0.92));
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.endpoint-access-status-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.endpoint-access-status-card {
+  padding: 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(27, 26, 23, 0.08);
+  background: rgba(255, 255, 255, 0.7);
   display: grid;
   gap: 8px;
-  margin-bottom: 16px;
 }
 
-.form-field label {
-  font-size: 0.85rem;
+.endpoint-access-status-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
   color: var(--muted);
 }
 
-.form-field input {
-  padding: 10px 12px;
-  border-radius: 12px;
+.endpoint-access-status-value {
+  font-size: 1rem;
+}
+
+.endpoint-access-notes {
+  display: grid;
+  gap: 12px;
+}
+
+.endpoint-access-note {
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(27, 26, 23, 0.08);
+  color: var(--muted);
+}
+
+.endpoint-access-card {
+  padding: 28px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(255, 248, 238, 0.88));
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.endpoint-access-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.endpoint-access-title {
+  margin: 6px 0 0;
+  font-size: 1.4rem;
+  font-weight: 600;
+}
+
+.endpoint-access-stage {
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(28, 139, 122, 0.12);
+  color: var(--accent-strong);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.endpoint-field {
+  display: grid;
+  gap: 14px;
+}
+
+.endpoint-label {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--muted);
+}
+
+.endpoint-input {
+  width: 100%;
+  padding: 16px 18px;
+  border-radius: 18px;
   border: 1px solid var(--border);
-  background: var(--card-2);
+  background: rgba(255, 255, 255, 0.74);
+  font-size: 1rem;
+  color: var(--ink);
+}
+
+.endpoint-input:focus {
+  outline: 2px solid rgba(28, 139, 122, 0.18);
+  border-color: rgba(28, 139, 122, 0.3);
+}
+
+.endpoint-help {
+  margin: -4px 0 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.6;
+}
+
+.endpoint-example-list {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.endpoint-example-chip {
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(27, 26, 23, 0.08);
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--ink);
+  font-weight: 600;
+  transition: transform 0.2s ease, border-color 0.2s ease;
+}
+
+.endpoint-example-chip:hover {
+  transform: translateY(-1px);
+  border-color: rgba(28, 139, 122, 0.24);
+}
+
+.endpoint-feedback {
+  min-height: 48px;
+}
+
+.endpoint-error,
+.endpoint-status-text {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.endpoint-error {
+  color: #9f1239;
+}
+
+.endpoint-status-text {
+  color: var(--muted);
+}
+
+.endpoint-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.endpoint-session-summary {
+  padding: 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(27, 26, 23, 0.08);
+  background: rgba(246, 241, 232, 0.84);
+  display: grid;
+  gap: 8px;
+}
+
+.endpoint-summary-label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--muted);
+}
+
+.endpoint-summary-text {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
 }
 
 .footer {
@@ -758,6 +944,20 @@
     width: 100%;
     justify-content: flex-start;
     flex-wrap: wrap;
+  }
+
+  .endpoint-access-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .endpoint-access-status-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .endpoint-access-card-header,
+  .endpoint-actions {
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .range-selector {
