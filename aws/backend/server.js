@@ -1,14 +1,19 @@
 import express from "express";
 import cors from "cors";
 import AWS from "aws-sdk";
+import dotenv from "dotenv";
 
-AWS.config.update({ region: "us-east-2" });
+dotenv.config();
+
+AWS.config.update({ region: process.env.AWS_REGION || "us-east-2" });
 
 const POWER_ACTIONS = new Set(["start", "stop"]);
 
 const createAwsClients = () => ({
-  ec2: new AWS.EC2()
+  ec2: new AWS.EC2(),
+  s3: new AWS.S3()
 });
+
 const validateRule = (rule) => {
   const ipRanges = (rule.IpRanges || []).map(ip => ip.CidrIp);
 
@@ -33,46 +38,37 @@ const classifyRisk = (rules) => {
   let hasPublic = false;
 
   for (const rule of rules) {
-    if (rule.isSSHOpenToWorld || rule.isAllTrafficOpen) {
-      return "HIGH";
-    }
-
-    if (rule.isPublic) {
-      hasPublic = true;
-    }
+    if (rule.isSSHOpenToWorld || rule.isAllTrafficOpen) return "HIGH";
+    if (rule.isPublic) hasPublic = true;
   }
 
-  if (hasPublic) return "MEDIUM";
-
-  return "LOW";
+  return hasPublic ? "MEDIUM" : "LOW";
 };
 
 export const createApp = (clients = createAwsClients()) => {
-  const { ec2 } = clients;
+  const { ec2, s3 } = clients;
   const app = express();
 
   app.use(cors());
   app.use(express.json());
 
   app.get("/", (req, res) => {
-    console.log("ROOT HIT");
     res.send("Server working properly");
   });
 
   app.get("/monitoring", async (req, res, next) => {
-    try {
-      console.log("Monitoring HIT");
+    console.log("Monitoring HIT");
 
+    try {
       let securityGroupsData = [];
+      let s3FilesData = [];
 
       try {
         const sgData = await ec2.describeSecurityGroups().promise();
 
         securityGroupsData = sgData.SecurityGroups.map(sg => {
-          const inbound = (sg.IpPermissions || []).map(rule => validateRule(rule));
-          const outbound = (sg.IpPermissionsEgress || []).map(rule => validateRule(rule));
-
-          const riskLevel = classifyRisk([...inbound, ...outbound]);
+          const inbound = (sg.IpPermissions || []).map(validateRule);
+          const outbound = (sg.IpPermissionsEgress || []).map(validateRule);
 
           return {
             groupId: sg.GroupId,
@@ -80,13 +76,11 @@ export const createApp = (clients = createAwsClients()) => {
             description: sg.Description,
             inboundRules: inbound,
             outboundRules: outbound,
-
-            riskLevel
+            riskLevel: classifyRisk([...inbound, ...outbound])
           };
         });
-
       } catch (err) {
-        console.error("Security Groups Error:", err.message);
+        console.error("EC2 ERROR:", err.message);
 
         securityGroupsData = [
           {
@@ -99,16 +93,45 @@ export const createApp = (clients = createAwsClients()) => {
         ];
       }
 
+      try {
+        if (!process.env.S3_BUCKET) {
+          throw new Error("S3_BUCKET not set in .env");
+        }
+
+        const s3Data = await s3.listObjectsV2({
+          Bucket: process.env.S3_BUCKET
+        }).promise();
+
+        s3FilesData = (s3Data.Contents || []).map(file => ({
+          key: file.Key,
+          size: file.Size,
+          lastModified: file.LastModified
+        }));
+      } catch (err) {
+        console.error("S3 ERROR:", err.message);
+
+        s3FilesData = [
+          {
+            key: "mock-file",
+            size: 0,
+            lastModified: new Date()
+          }
+        ];
+      }
+
       res.status(200).json({
         timestamp: new Date().toISOString(),
         region: AWS.config.region,
-        securityGroups: securityGroupsData
+        securityGroups: securityGroupsData,
+        s3Files: s3FilesData,
+        fileCount: s3FilesData.length
       });
 
     } catch (error) {
       next(error);
     }
   });
+
   app.post("/instances/:instanceId/power", async (req, res, next) => {
     try {
       const { instanceId } = req.params;
@@ -124,7 +147,7 @@ export const createApp = (clients = createAwsClients()) => {
       if (!POWER_ACTIONS.has(action)) {
         return res.status(400).json({
           error: "ValidationError",
-          message: "Body field 'action' must be either 'start' or 'stop'"
+          message: "Body field must be 'start' or 'stop'"
         });
       }
 
@@ -136,23 +159,23 @@ export const createApp = (clients = createAwsClients()) => {
         await ec2.stopInstances(request).promise();
       }
 
-      return res.status(200).json({
+      res.status(200).json({
         instanceId,
         action,
         status: "accepted"
       });
 
     } catch (error) {
-      return next(error);
+      next(error);
     }
   });
 
   app.use((req, res) => {
-    res.status(404).json({ error: "Route was not found" });
+    res.status(404).json({ error: "Route not found" });
   });
 
   app.use((err, req, res, next) => {
-    console.error("Backend Error:", err);
+    console.error("Backend Error:", err.message);
     res.status(500).json({
       error: "Internal Server Error",
       message: err.message
@@ -162,11 +185,13 @@ export const createApp = (clients = createAwsClients()) => {
   return app;
 };
 
-const PORT = 5000;
+const PORT = 5001;
 
 if (process.env.NODE_ENV !== "test") {
+  console.log("Starting server...");
+
   const app = createApp();
-  app.listen(PORT, "127.0.0.1", () => {
+  app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
 }
