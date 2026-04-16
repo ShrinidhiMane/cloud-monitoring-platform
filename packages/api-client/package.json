@@ -10,6 +10,8 @@
   "author": "\"Team5\"",
   "type": "module",
   "main": "dist/index.js",
+  "react-native": "src/index.ts",
+  "types": "dist/index.d.ts",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "build":"tsc",

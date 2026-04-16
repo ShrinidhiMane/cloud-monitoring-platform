@@ -1,5 +1,9 @@
-{
-  "expo": {
+import { ExpoConfig, ConfigContext } from 'expo/config';
+
+import  androidConfig from "./platforms/android/app.config";
+import  iosConfig from "./platforms/ios/app.config";
+
+const commonConfig:ExpoConfig={
     "name": "mobile",
     "slug": "mobile",
     "version": "1.0.0",
@@ -8,34 +12,10 @@
     "scheme": "mobile",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
-    "ios": {
-      "supportsTablet": true,
-      "bundleIdentifier": "com.anonymous.mobile"
-    },
-    "android": {
-      "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
-    "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
-    "newArchEnabled": true,
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
-    },
-    "ios": {
-      "supportsTablet": true
-    },
-    "android": {
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
-      },
-      "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
     },
     "web": {
       "output": "static",
@@ -60,7 +40,18 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-      "favicon": "./assets/favicon.png"
-    }
-  }
+    },
+    
 }
+
+
+
+
+export default ({ config }: ConfigContext): ExpoConfig => {
+
+  return {
+  ...config,
+  ...commonConfig,
+  ...{"android":androidConfig},
+  ...{"ios":iosConfig}
+}}

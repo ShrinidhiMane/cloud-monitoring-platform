@@ -1,41 +1,100 @@
-const instances = [
-  {
-    id: "i-0a12b3c4d5e6f7890",
-    name: "Web Server",
-    state: "running",
-    type: "t3.medium",
-    zone: "us-east-1a",
-    cpu: 42,
-    memory: 61,
-  },
-  {
-    id: "i-0123abc456def7890",
-    name: "Database Server",
-    state: "stopped",
-    type: "t3.large",
-    zone: "us-east-1b",
-    cpu: 0,
-    memory: 0,
-  },
-  {
-    id: "i-09aa23bb44cc55dd6",
-    name: "Batch Worker",
-    state: "pending",
-    type: "t3.small",
-    zone: "us-east-1c",
-    cpu: 65,
-    memory: 38,
-  },
-];
+import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
+import { fetchMonitoring, type MonitoringInstance } from "api-client";
 
-const statCards = [
-  { label: "Running", value: "1" },
-  { label: "Stopped", value: "1" },
-  { label: "Pending", value: "1" },
-  { label: "Alerts", value: "2" },
-];
+function formatTimestamp(value?: string) {
+  if (!value) {
+    return "Not available";
+  }
+
+  return new Date(value).toLocaleString();
+}
 
 export default function Instances() {
+  const [instances, setInstances] = useState<MonitoringInstance[]>([]);
+  const [search, setSearch] = useState("");
+  const [lastUpdated, setLastUpdated] = useState<string>("");
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadMonitoring = async () => {
+      try {
+        if (isMounted && !instances.length) {
+          setIsLoading(true);
+        }
+
+        const response = await fetchMonitoring("1h");
+
+        if (!isMounted) {
+          return;
+        }
+
+        setInstances(response.instances);
+        setLastUpdated(response.timestamp);
+        setError("");
+      } catch (err) {
+        if (!isMounted) {
+          return;
+        }
+
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Failed to load monitoring data.",
+        );
+      } finally {
+        if (isMounted) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    loadMonitoring();
+    const intervalId = window.setInterval(loadMonitoring, 30000);
+
+    return () => {
+      isMounted = false;
+      window.clearInterval(intervalId);
+    };
+  }, [instances.length]);
+
+  const filteredInstances = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) {
+      return instances;
+    }
+
+    return instances.filter((instance) => {
+      return [
+        instance.name,
+        instance.id,
+        instance.instanceId,
+        instance.type,
+        instance.availabilityZone ?? "",
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(query);
+    });
+  }, [instances, search]);
+
+  const stats = useMemo(() => {
+    const running = instances.filter((item) => item.state === "running").length;
+    const stopped = instances.filter((item) => item.state === "stopped").length;
+    const pending = instances.filter((item) => item.state === "pending").length;
+    const alerts = instances.filter((item) => item.statusCheckFailed > 0).length;
+
+    return [
+      { label: "Running", value: String(running) },
+      { label: "Stopped", value: String(stopped) },
+      { label: "Pending", value: String(pending) },
+      { label: "Alerts", value: String(alerts) },
+    ];
+  }, [instances]);
+
   return (
     <div className="page">
       <section className="section">
@@ -44,16 +103,24 @@ export default function Instances() {
             <div className="eyebrow">Infrastructure Overview</div>
             <h1 className="page-title">Instance Control Center</h1>
             <p className="page-subtitle">
-              Monitor health, usage, and security posture across your EC2 fleet.
+              Monitor health, usage, and performance across your EC2 fleet.
+            </p>
+            <p className="page-subtitle" style={{ marginTop: 8 }}>
+              Last refreshed: {formatTimestamp(lastUpdated)}
             </p>
           </div>
           <div className="header-actions">
-            <button className="btn ghost">Schedule Maintenance</button>
-            <button className="btn primary">Launch Instance</button>
+            <button className="btn ghost" type="button">
+              Auto refresh: 30s
+            </button>
+            <button className="btn primary" type="button">
+              Live Monitoring
+            </button>
           </div>
         </div>
+
         <div className="stat-grid">
-          {statCards.map((card) => (
+          {stats.map((card) => (
             <div key={card.label} className="stat-card">
               <div className="stat-label">{card.label}</div>
               <div className="stat-value">{card.value}</div>
@@ -65,43 +132,69 @@ export default function Instances() {
       <section className="panel">
         <div className="panel-header">
           <div className="panel-title">Instances</div>
-          <input className="search" placeholder="Search by tag or ID" />
+          <input
+            className="search"
+            placeholder="Search by name, type, zone, or ID"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
         </div>
+
+        {isLoading ? <p className="page-subtitle">Loading live monitoring data...</p> : null}
+        {error ? <p className="page-subtitle" style={{ color: "#B91C1C" }}>{error}</p> : null}
+
+        {!isLoading && !filteredInstances.length ? (
+          <p className="page-subtitle">No instances matched your search.</p>
+        ) : null}
+
         <div className="card-grid">
-          {instances.map((instance) => (
+          {filteredInstances.map((instance) => (
             <article key={instance.id} className="instance-card">
               <div className="instance-header">
                 <div>
                   <div className="instance-name">{instance.name}</div>
-                  <div className="instance-id">{instance.id}</div>
+                  <div className="instance-id">{instance.instanceId}</div>
                 </div>
                 <span className="status-pill" data-state={instance.state}>
                   {instance.state}
                 </span>
               </div>
+
               <div className="instance-meta">
                 <div>Type: {instance.type}</div>
-                <div>Zone: {instance.zone}</div>
+                <div>Zone: {instance.availabilityZone ?? "N/A"}</div>
+                <div>Public IP: {instance.publicIp ?? "Private only"}</div>
+                <div>Status checks: {instance.statusCheckFailed}</div>
               </div>
+
               <div className="meter">
                 <div>CPU</div>
-                <div>{instance.cpu}%</div>
+                <div>{instance.cpuPercent}%</div>
                 <div className="meter-bar">
-                  <span style={{ width: `${instance.cpu}%` }} />
+                  <span style={{ width: `${Math.min(instance.cpuPercent, 100)}%` }} />
                 </div>
               </div>
+
               <div className="meter">
                 <div>Memory</div>
-                <div>{instance.memory}%</div>
+                <div>{instance.memoryPercent}%</div>
                 <div className="meter-bar">
-                  <span style={{ width: `${instance.memory}%` }} />
+                  <span
+                    style={{ width: `${Math.min(instance.memoryPercent, 100)}%` }}
+                  />
                 </div>
               </div>
+
               <div className="card-actions">
-                <button className="btn ghost">Start</button>
-                <button className="btn ghost">Stop</button>
-                <button className="btn">Reboot</button>
-                <button className="btn primary">Details</button>
+                <button className="btn ghost" type="button">
+                  Net In: {instance.networkInBytes}
+                </button>
+                <button className="btn ghost" type="button">
+                  Net Out: {instance.networkOutBytes}
+                </button>
+                <Link className="btn primary" to={`/instances/${instance.id}`}>
+                  Details
+                </Link>
               </div>
             </article>
           ))}

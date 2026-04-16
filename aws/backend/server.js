@@ -1,153 +1,172 @@
-const express = require("express");
-const AWS = require("aws-sdk");
-
-const app = express();
+import express from "express";
+import cors from "cors";
+import AWS from "aws-sdk";
 
 AWS.config.update({ region: "us-east-2" });
 
-const ec2 = new AWS.EC2();
-const cloudwatch = new AWS.CloudWatch();
+const POWER_ACTIONS = new Set(["start", "stop"]);
 
-app.get("/monitoring", async (req,res) => 
-{
-  try
-  {
-    const result = [];
-    
-    const ec2Data = await ec2.describeInstances(
-    {
-      Filters: [{ Name: "instance-state-name", Values: ["running"] }]
-    }).promise();
+const createAwsClients = () => ({
+  ec2: new AWS.EC2()
+});
+const validateRule = (rule) => {
+  const ipRanges = (rule.IpRanges || []).map(ip => ip.CidrIp);
 
-    for (let i = 0; i < ec2Data.Reservations.length; i++)
-    {
-      const reservation = ec2Data.Reservations[i];
+  return {
+    protocol: rule.IpProtocol || "unknown",
+    fromPort: rule.FromPort ?? "all",
+    toPort: rule.ToPort ?? "all",
+    isValidPortRange:
+      rule.FromPort !== undefined &&
+      rule.ToPort !== undefined &&
+      rule.FromPort <= rule.ToPort,
+    ipRanges,
+    isPublic: ipRanges.includes("0.0.0.0/0"),
+    isSSHOpenToWorld:
+      rule.FromPort === 22 && ipRanges.includes("0.0.0.0/0"),
+    isAllTrafficOpen:
+      rule.IpProtocol === "-1" && ipRanges.includes("0.0.0.0/0")
+  };
+};
 
-      for (let j = 0; j < reservation.Instances.length; j++)
-      {
-        const instance = reservation.Instances[j];
+const classifyRisk = (rules) => {
+  let hasPublic = false;
 
-        const instanceId = instance.InstanceId;
-        const state = instance.State.Name;
-        const type = instance.InstanceType;
-
-        const endTime = new Date();
-        const startTime = new Date(endTime.getTime() - 60 * 60 * 1000);
-
-        // CPU
-        const cpuData = await cloudwatch.getMetricStatistics(
-        {
-          Namespace: "AWS/EC2",
-          MetricName: "CPUUtilization",
-          Dimensions: [{ Name: "InstanceId", Value: instanceId }],
-          StartTime: startTime,
-          EndTime: endTime,
-          Period: 300,
-          Statistics: ["Average"]
-        }).promise();
-
-        let cpuValue = 0;
-        if (cpuData.Datapoints.length > 0)
-        {
-          cpuValue = cpuData.Datapoints[cpuData.Datapoints.length - 1].Average;
-        }
-
-        // Network In
-        const netInData = await cloudwatch.getMetricStatistics(
-        {
-          Namespace: "AWS/EC2",
-          MetricName: "NetworkIn",
-          Dimensions: [{ Name: "InstanceId", Value: instanceId }],
-          StartTime: startTime,
-          EndTime: endTime,
-          Period: 300,
-          Statistics: ["Sum"]
-        }).promise();
-
-        let networkIn = 0;
-        if (netInData.Datapoints.length > 0)
-        {
-          networkIn = netInData.Datapoints[netInData.Datapoints.length - 1].Sum;
-        }
-
-        // Network Out
-        const netOutData = await cloudwatch.getMetricStatistics(
-        {
-          Namespace: "AWS/EC2",
-          MetricName: "NetworkOut",
-          Dimensions: [{ Name: "InstanceId", Value: instanceId }],
-          StartTime: startTime,
-          EndTime: endTime,
-          Period: 300,
-          Statistics: ["Sum"]
-        }).promise();
-
-        let networkOut = 0;
-        if (netOutData.Datapoints.length > 0)
-        {
-          networkOut = netOutData.Datapoints[netOutData.Datapoints.length - 1].Sum;
-        }
-
-        // Disk Read
-        const diskReadData = await cloudwatch.getMetricStatistics(
-        {
-          Namespace: "AWS/EC2",
-          MetricName: "DiskReadOps",
-          Dimensions: [{ Name: "InstanceId", Value: instanceId }],
-          StartTime: startTime,
-          EndTime: endTime,
-          Period: 300,
-          Statistics: ["Sum"]
-        }).promise();
-
-        let diskRead = 0;
-        if (diskReadData.Datapoints.length > 0)
-        {
-          diskRead = diskReadData.Datapoints[diskReadData.Datapoints.length - 1].Sum;
-        }
-
-        // Disk Write
-        const diskWriteData = await cloudwatch.getMetricStatistics(
-        {
-          Namespace: "AWS/EC2",
-          MetricName: "DiskWriteOps",
-          Dimensions: [{ Name: "InstanceId", Value: instanceId }],
-          StartTime: startTime,
-          EndTime: endTime,
-          Period: 300,
-          Statistics: ["Sum"]
-        }).promise();
-
-        let diskWrite = 0;
-        if (diskWriteData.Datapoints.length > 0)
-        {
-          diskWrite = diskWriteData.Datapoints[diskWriteData.Datapoints.length - 1].Sum;
-        }
-
-        result.push(
-        {
-          id: instanceId,
-          state: state,
-          type: type,
-          cpuPercent: Number(cpuValue.toFixed(2)),
-          networkInBytes: networkIn,
-          networkOutBytes: networkOut,
-          diskReadOps: diskRead,
-          diskWriteOps: diskWrite
-        });
-      }
+  for (const rule of rules) {
+    if (rule.isSSHOpenToWorld || rule.isAllTrafficOpen) {
+      return "HIGH";
     }
 
-    res.json({ instances: result });
+    if (rule.isPublic) {
+      hasPublic = true;
+    }
   }
-  catch(error)
-  {
-    console.log(error);
-    res.json({ status: "Error fetching monitoring data" });
-  }
-});
 
-app.listen(5000, "0.0.0.0", () =>
-{
-  console.log("Server started successfully");
-});
+  if (hasPublic) return "MEDIUM";
+
+  return "LOW";
+};
+
+export const createApp = (clients = createAwsClients()) => {
+  const { ec2 } = clients;
+  const app = express();
+
+  app.use(cors());
+  app.use(express.json());
+
+  app.get("/", (req, res) => {
+    console.log("ROOT HIT");
+    res.send("Server working properly");
+  });
+
+  app.get("/monitoring", async (req, res, next) => {
+    try {
+      console.log("Monitoring HIT");
+
+      let securityGroupsData = [];
+
+      try {
+        const sgData = await ec2.describeSecurityGroups().promise();
+
+        securityGroupsData = sgData.SecurityGroups.map(sg => {
+          const inbound = (sg.IpPermissions || []).map(rule => validateRule(rule));
+          const outbound = (sg.IpPermissionsEgress || []).map(rule => validateRule(rule));
+
+          const riskLevel = classifyRisk([...inbound, ...outbound]);
+
+          return {
+            groupId: sg.GroupId,
+            groupName: sg.GroupName,
+            description: sg.Description,
+            inboundRules: inbound,
+            outboundRules: outbound,
+
+            riskLevel
+          };
+        });
+
+      } catch (err) {
+        console.error("Security Groups Error:", err.message);
+
+        securityGroupsData = [
+          {
+            groupId: "sg-mock",
+            groupName: "mock-group",
+            inboundRules: [],
+            outboundRules: [],
+            riskLevel: "LOW"
+          }
+        ];
+      }
+
+      res.status(200).json({
+        timestamp: new Date().toISOString(),
+        region: AWS.config.region,
+        securityGroups: securityGroupsData
+      });
+
+    } catch (error) {
+      next(error);
+    }
+  });
+  app.post("/instances/:instanceId/power", async (req, res, next) => {
+    try {
+      const { instanceId } = req.params;
+      const action = req.body?.action;
+
+      if (!instanceId) {
+        return res.status(400).json({
+          error: "ValidationError",
+          message: "Path parameter 'instanceId' is required"
+        });
+      }
+
+      if (!POWER_ACTIONS.has(action)) {
+        return res.status(400).json({
+          error: "ValidationError",
+          message: "Body field 'action' must be either 'start' or 'stop'"
+        });
+      }
+
+      const request = { InstanceIds: [instanceId] };
+
+      if (action === "start") {
+        await ec2.startInstances(request).promise();
+      } else {
+        await ec2.stopInstances(request).promise();
+      }
+
+      return res.status(200).json({
+        instanceId,
+        action,
+        status: "accepted"
+      });
+
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.use((req, res) => {
+    res.status(404).json({ error: "Route was not found" });
+  });
+
+  app.use((err, req, res, next) => {
+    console.error("Backend Error:", err);
+    res.status(500).json({
+      error: "Internal Server Error",
+      message: err.message
+    });
+  });
+
+  return app;
+};
+
+const PORT = 5000;
+
+if (process.env.NODE_ENV !== "test") {
+  const app = createApp();
+  app.listen(PORT, "127.0.0.1", () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+  });
+}

@@ -1,6 +1,8 @@
 import React from "react";
 import { StyleSheet, Text, View } from "react-native";
-import type { InstanceState, InstanceSummary } from "@/types/instances";
+
+import { InstanceMetricsGrid } from "@/components/InstanceMetricsGrid";
+import type { InstanceState, MonitoringInstance } from "@/services/apiClient";
 
 const STATE_COLORS: Record<InstanceState, { bg: string; text: string }> = {
   pending: { bg: "#FEF3C7", text: "#92400E" },
@@ -12,7 +14,7 @@ const STATE_COLORS: Record<InstanceState, { bg: string; text: string }> = {
 };
 
 interface InstanceCardProps {
-  instance: InstanceSummary;
+  instance: MonitoringInstance;
 }
 
 export function InstanceCard({ instance }: InstanceCardProps) {
@@ -39,6 +41,11 @@ export function InstanceCard({ instance }: InstanceCardProps) {
       <View style={styles.detailRow}>
         <Text style={styles.label}>Type</Text>
         <Text style={styles.value}>{instance.type}</Text>
+      </View>
+
+      <View style={styles.metricsSection}>
+        <Text style={styles.metricsTitle}>Live Snapshot</Text>
+        <InstanceMetricsGrid metrics={instance.metrics} compact />
       </View>
     </View>
   );
@@ -96,5 +103,16 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "#0F172A",
     fontWeight: "500",
+  },
+  metricsSection: {
+    marginTop: 14,
+    gap: 10,
+  },
+  metricsTitle: {
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
+    color: "#334155",
   },
 });
