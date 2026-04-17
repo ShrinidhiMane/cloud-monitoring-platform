@@ -204,6 +204,20 @@ test("POST /instances/:instanceId/power start returns transition details", async
   assert.equal(response.body.requestId, "req-start");
 });
 
+test("POST /instances/:instanceId/power stop returns transition details", async () => {
+  const app = createApp(buildClients());
+
+  const response = await request(app)
+    .post("/instances/i-1234567890/power")
+    .send({ action: "stop" });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.status, "accepted");
+  assert.equal(response.body.previousState, "running");
+  assert.equal(response.body.currentState, "stopping");
+  assert.equal(response.body.requestId, "req-stop");
+});
+
 test("POST /instances/:instanceId/power reboot returns accepted response", async () => {
   const app = createApp(buildClients());
 

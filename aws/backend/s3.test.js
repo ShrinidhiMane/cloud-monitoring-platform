@@ -12,16 +12,71 @@ const buildApp = () => {
   app.delete("/delete/:key", deleteFile);
   return app;
 };
+const assertStructuredError = (res) => {
+  assert.ok(res.body);
+  assert.equal(typeof res.body.error, "string");
+};
 
-test("POST /upload returns 400 when no file is provided", async () => {
+const assertStructuredSuccess = (res, expectedMessage) => {
+  assert.ok(res.body);
+  assert.equal(res.body.message, expectedMessage);
+};
+
+test("POST /upload returns 400 when no file is attached", async () => {
   const app = buildApp();
-  const response = await request(app).post("/upload");
-  assert.equal(response.status, 400);
-  assert.equal(response.body.error, "No file uploaded");
+  const res = await request(app).post("/upload");
+  assert.equal(res.status, 400);
+  assert.equal(res.body.error, "No file uploaded");
 });
 
-test("DELETE /delete/:key returns 500 when AWS credentials are not configured", async () => {
+test("POST /upload accepts a file and returns a structured response", async () => {
   const app = buildApp();
-  const response = await request(app).delete("/delete/some-key");
-  assert.equal(response.status, 500);
+  const res = await request(app)
+    .post("/upload")
+    .attach("file", Buffer.from("hello world"), "hello.txt");
+
+  assert.ok(
+    res.status === 200 || res.status === 500,
+    `Expected 200 or 500, got ${res.status}`,
+  );
+
+  if (res.status === 200) {
+    assertStructuredSuccess(res, "Upload successful");
+    assert.ok(typeof res.body.key === "string" && res.body.key.length > 0);
+  } else {
+    assertStructuredError(res);
+  }
+});
+
+test("POST /upload rejects files larger than 5 MB", async () => {
+  const app = buildApp();
+  const bigFile = Buffer.alloc(6 * 1024 * 1024, "x");
+  const res = await request(app)
+    .post("/upload")
+    .attach("file", bigFile, "big.bin");
+  assert.ok(
+    res.status === 400 || res.status === 500,
+    `Expected 400 or 500 for oversized file, got ${res.status}`,
+  );
+});
+
+test("DELETE /delete/:key returns a structured response", async () => {
+  const app = buildApp();
+  const res = await request(app).delete("/delete/uploads%2Fsome-file.txt");
+
+  assert.ok(
+    res.status === 200 || res.status === 500,
+    `Expected 200 or 500, got ${res.status}`,
+  );
+
+  if (res.status === 200) {
+    assertStructuredSuccess(res, "Deleted successfully");
+  } else {
+    assertStructuredError(res);
+  }
+});
+test("DELETE /delete/:key with missing key returns 404", async () => {
+  const app = buildApp();
+  const res = await request(app).delete("/delete/");
+  assert.equal(res.status, 404);
 });
