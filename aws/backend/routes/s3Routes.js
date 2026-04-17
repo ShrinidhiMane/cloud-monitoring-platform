@@ -15,7 +15,7 @@ router.post(
     console.log("AFTER MULTER", req.file);
     next();
   },
-  uploadFile
+  uploadFile,
 );
 
 router.delete("/delete/:key", deleteFile);

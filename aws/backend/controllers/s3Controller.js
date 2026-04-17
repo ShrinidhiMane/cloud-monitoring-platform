@@ -1,4 +1,8 @@
-import { S3Client, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import {
+  S3Client,
+  PutObjectCommand,
+  DeleteObjectCommand,
+} from "@aws-sdk/client-s3";
 
 const s3 = new S3Client({
   region: process.env.AWS_REGION || "us-east-2",
@@ -24,7 +28,7 @@ export const uploadFile = async (req, res) => {
         Key: key,
         Body: req.file.buffer,
         ContentType: req.file.mimetype,
-      })
+      }),
     );
 
     console.log("Upload completed");
@@ -44,7 +48,7 @@ export const deleteFile = async (req, res) => {
       new DeleteObjectCommand({
         Bucket: process.env.S3_BUCKET,
         Key: key,
-      })
+      }),
     );
 
     res.json({ message: "Deleted successfully" });
