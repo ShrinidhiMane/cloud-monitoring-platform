@@ -30,6 +30,7 @@ import type {
   MonitoringResponse,
 } from "api-client";
 import { fetchMonitoringOverview } from "api-client";
+// Polling interval for live EC2 instance data refresh
 
 const POLL_INTERVAL_MS = 30_000;
 const STATUS_TIMESTAMP_FORMATTER = new Intl.DateTimeFormat("en-US", {
@@ -137,6 +138,7 @@ function compareInstances(
   return left.name.localeCompare(right.name);
 }
 
+// Main screen component — renders EC2 instance list with search, filter, and favorites support
 export default function InstancesScreen() {
   const router = useRouter();
   const [instances, setInstances] = useState<MonitoringInstance[]>([]);
