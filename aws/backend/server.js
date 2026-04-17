@@ -522,7 +522,7 @@ export const createApp = (clients = createAwsClients()) => {
     res.status(404).json({ error: "Route was not found" });
   });
 
-  app.use((err, req, res) => {
+  app.use((err, req, res, _next) => {
     console.error("Backend Error:", err);
     res.status(500).json({
       error: "Internal Server Error",
