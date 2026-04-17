@@ -21,6 +21,7 @@ import {
   type AwsSetupProfile,
 } from "@/services/awsSetupStorage";
 
+// Manages device security, AWS connection profiles, and local storage preferences
 export default function SettingsScreen() {
   const router = useRouter();
   const {
