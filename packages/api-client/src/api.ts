@@ -3,9 +3,11 @@ import type {
   InstancePowerAction,
   InstancePowerResponse,
   InstanceState,
+  MonitoringAlarm,
   MonitoringMetricPoint,
   MonitoringInstance,
   MonitoringResponse,
+  MonitoringStatus,
 } from "./types";
 
 const KNOWN_INSTANCE_STATES: InstanceState[] = [
@@ -93,6 +95,14 @@ interface MonitoringMetricsResponse {
   diskWriteOps?: number;
 }
 
+interface MonitoringAlarmResponse {
+  alarmName?: string;
+  state?: string;
+  metric?: string;
+  namespace?: string;
+  threshold?: number;
+}
+
 interface MonitoringInstanceResponse {
   id?: string;
   instanceId?: string;
@@ -118,6 +128,8 @@ interface MonitoringApiResponse {
   instances?: MonitoringInstanceResponse[];
   region?: string;
   timestamp?: string;
+  status?: string;
+  alarms?: MonitoringAlarmResponse[];
 }
 
 interface InstancePowerApiResponse {
@@ -266,9 +278,7 @@ function normalizeMonitoringInstance(
     state: instance.state,
     type: instance.type,
     zone: instance.zone,
-    cpuPercent: roundMetricValue(
-      rawCpuValue ?? getLastSeriesValue(cpuSeries),
-    ),
+    cpuPercent: roundMetricValue(rawCpuValue ?? getLastSeriesValue(cpuSeries)),
     memoryPercent: roundMetricValue(
       rawMemoryValue ?? getLastSeriesValue(memorySeries),
     ),
@@ -298,6 +308,34 @@ function normalizeMonitoringInstance(
   };
 }
 
+function normalizeMonitoringStatus(value?: string): MonitoringStatus {
+  if (value === "healthy" || value === "degraded" || value === "unknown") {
+    return value;
+  }
+  return "unknown";
+}
+
+function normalizeMonitoringAlarms(
+  alarms: MonitoringAlarmResponse[] = [],
+): MonitoringAlarm[] {
+  return alarms
+    .filter(
+      (alarm): alarm is Required<MonitoringAlarmResponse> =>
+        typeof alarm.alarmName === "string" &&
+        typeof alarm.state === "string" &&
+        typeof alarm.metric === "string" &&
+        typeof alarm.namespace === "string" &&
+        typeof alarm.threshold === "number",
+    )
+    .map((alarm) => ({
+      alarmName: alarm.alarmName,
+      state: alarm.state,
+      metric: alarm.metric,
+      namespace: alarm.namespace,
+      threshold: alarm.threshold,
+    }));
+}
+
 function normalizeInstanceState(value?: string | null): InstanceState | null {
   if (!value) {
     return null;
@@ -319,6 +357,8 @@ export async function fetchMonitoringOverview(
     instances: (response.instances ?? []).map(normalizeMonitoringInstance),
     region: response.region ?? "",
     timestamp: response.timestamp ?? new Date().toISOString(),
+    status: normalizeMonitoringStatus(response.status),
+    alarms: normalizeMonitoringAlarms(response.alarms),
   };
 }
 

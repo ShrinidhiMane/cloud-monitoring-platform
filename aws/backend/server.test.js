@@ -105,6 +105,18 @@ const buildClients = (overrides = {}) => {
   const cloudwatch = {
     getMetricStatistics: ({ MetricName }) =>
       wrapResult(metricData[MetricName] || { Datapoints: [] }),
+    describeAlarms: () =>
+      wrapResult({
+        MetricAlarms: [
+          {
+            AlarmName: "HighCPUAlarm",
+            StateValue: "OK",
+            MetricName: "CPUUtilization",
+            Namespace: "AWS/EC2",
+            Threshold: 80,
+          },
+        ],
+      }),
   };
 
   const s3 = {
@@ -161,6 +173,10 @@ test("GET /monitoring returns aggregated EC2 and S3 data", async () => {
   assert.equal(response.body.s3[0].bucketName, "team-bucket");
   assert.equal(response.body.s3[0].encryptionEnabled, true);
   assert.equal(response.body.s3[0].publicAccessBlocked, true);
+  // Alarm assertions
+  assert.equal(response.body.alarms.length, 1);
+  assert.equal(response.body.alarms[0].alarmName, "HighCPUAlarm");
+  assert.equal(response.body.alarms[0].state, "OK");
 });
 
 test("POST /instances/:instanceId/power validates action", async () => {
@@ -262,4 +278,40 @@ test("GET /monitoring includes infrastructure health status", async () => {
 
   assert.equal(response.status, 200);
   assert.ok(["healthy", "degraded", "unknown"].includes(response.body.status));
+});
+
+test("GET /monitoring includes CloudWatch alarms", async () => {
+  const app = createApp(buildClients());
+
+  const response = await request(app).get("/monitoring");
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.alarms.length, 1);
+});
+
+test("GET /monitoring sets status to degraded when an alarm is firing", async () => {
+  const app = createApp(
+    buildClients({
+      cloudwatch: {
+        getMetricStatistics: buildClients().cloudwatch.getMetricStatistics,
+        describeAlarms: () =>
+          wrapResult({
+            MetricAlarms: [
+              {
+                AlarmName: "HighCPUAlarm",
+                StateValue: "ALARM",
+                MetricName: "CPUUtilization",
+                Namespace: "AWS/EC2",
+                Threshold: 80,
+              },
+            ],
+          }),
+      },
+    }),
+  );
+
+  const response = await request(app).get("/monitoring");
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.status, "degraded");
 });

@@ -14,10 +14,10 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "build":"tsc",
-    "dev":"tsc --watch",
-    "lint":"eslint . --max-warnings=0",
-    "lint:fix":"eslint . --fix",
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "lint": "eslint . --max-warnings=0",
+    "lint:fix": "eslint . --fix",
     "generate": "openapi-typescript ../../docs/openapi/openapi.yaml -o src/openapi/schema.ts"
   },
   "dependencies": {

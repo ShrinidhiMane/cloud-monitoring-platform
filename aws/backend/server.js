@@ -8,13 +8,6 @@ const POWER_ACTIONS = new Set(["start", "stop", "reboot"]);
 
 const DEFAULT_RANGE = "1h";
 
-const ALLOWED_INSTANCE_IDS = new Set(
-  (process.env.AWS_ALLOWED_INSTANCE_IDS || "")
-    .split(",")
-    .map((id) => id.trim())
-    .filter(Boolean),
-);
-
 const RANGE_CONFIG = {
   "15m": {
     lookbackMs: 15 * 60 * 1000,
@@ -58,7 +51,9 @@ function roundMetricValue(value) {
 
 function sortDatapoints(datapoints = []) {
   return [...datapoints].sort((left, right) => {
-    return new Date(left.Timestamp).getTime() - new Date(right.Timestamp).getTime();
+    return (
+      new Date(left.Timestamp).getTime() - new Date(right.Timestamp).getTime()
+    );
   });
 }
 
@@ -111,6 +106,15 @@ function getSecurityGroupNames(instance) {
   return (instance.SecurityGroups ?? [])
     .map((group) => group.GroupName ?? group.GroupId)
     .filter(Boolean);
+}
+
+async function safeAwsCall(fn, fallback) {
+  try {
+    return await fn();
+  } catch (error) {
+    console.error("AWS call failed, using fallback:", error.message);
+    return fallback;
+  }
 }
 
 async function loadInstanceMetrics(
@@ -283,7 +287,9 @@ async function loadS3Buckets(cloudwatch, s3) {
       try {
         await s3.getBucketEncryption({ Bucket: bucket.Name }).promise();
         encryptionEnabled = true;
-      } catch {}
+      } catch (_e) {
+        /* expected */
+      }
 
       let publicAccessBlocked = false;
       try {
@@ -295,7 +301,9 @@ async function loadS3Buckets(cloudwatch, s3) {
           publicAccess.PublicAccessBlockConfiguration.BlockPublicPolicy &&
           publicAccess.PublicAccessBlockConfiguration.IgnorePublicAcls &&
           publicAccess.PublicAccessBlockConfiguration.RestrictPublicBuckets;
-      } catch {}
+      } catch (_e) {
+        /* expected */
+      }
 
       s3Buckets.push({
         bucketName: bucket.Name,
@@ -430,12 +438,34 @@ export const createApp = (clients = createAwsClients()) => {
         loadSecurityGroups(ec2),
       ]);
 
+      // Fetch CloudWatch alarms
+      const alarmData = await safeAwsCall(
+        () => cloudwatch.describeAlarms().promise(),
+        { MetricAlarms: [] },
+      );
+
+      const alarms = (alarmData.MetricAlarms || []).map((alarm) => ({
+        alarmName: alarm.AlarmName,
+        state: alarm.StateValue,
+        metric: alarm.MetricName,
+        namespace: alarm.Namespace,
+        threshold: alarm.Threshold,
+      }));
+
+      // Derive overall health status; degrade if any alarm is firing
+      let overallStatus = "healthy";
+      if (alarms.some((alarm) => alarm.state === "ALARM")) {
+        overallStatus = "degraded";
+      }
+
       res.status(200).json({
         timestamp: responseTimestamp,
         region: AWS.config.region,
+        status: overallStatus,
         instances,
         s3: s3Buckets,
         security: securityGroups,
+        alarms,
       });
     } catch (error) {
       next(error);
@@ -457,7 +487,8 @@ export const createApp = (clients = createAwsClients()) => {
       if (!POWER_ACTIONS.has(action)) {
         return res.status(400).json({
           error: "ValidationError",
-          message: "Body field 'action' must be one of 'start', 'stop', or 'reboot'",
+          message:
+            "Body field 'action' must be one of 'start', 'stop', or 'reboot'",
         });
       }
 
@@ -488,10 +519,10 @@ export const createApp = (clients = createAwsClients()) => {
   });
 
   app.use((req, res) => {
-    res.status(404).json({ error: "Route not found" });
+    res.status(404).json({ error: "Route was not found" });
   });
 
-  app.use((err, req, res, _next) => {
+  app.use((err, req, res) => {
     console.error("Backend Error:", err);
     res.status(500).json({
       error: "Internal Server Error",

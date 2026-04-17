@@ -7,6 +7,8 @@ export type InstanceState =
   | "terminated"
   | "unknown";
 
+export type MonitoringStatus = "healthy" | "degraded" | "unknown";
+
 export interface InstanceSummary {
   id: string;
   name: string;
@@ -29,10 +31,20 @@ export interface MonitoringInstance extends InstanceSummary {
   updatedAt: string;
 }
 
+export interface MonitoringAlarm {
+  alarmName: string;
+  state: string;
+  metric: string;
+  namespace: string;
+  threshold: number;
+}
+
 export interface MonitoringResponse {
   instances: MonitoringInstance[];
   region: string;
   timestamp: string;
+  status: MonitoringStatus;
+  alarms: MonitoringAlarm[];
 }
 
 export type InstancePowerAction = "start" | "stop" | "reboot";
