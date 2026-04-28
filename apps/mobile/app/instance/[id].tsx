@@ -14,6 +14,7 @@ import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 
+import { AlarmFeedCard } from "@/components/AlarmFeedCard";
 import { MetricTrendChart } from "@/components/MetricTrendChart";
 import { useAutoRefresh, type RefreshReason } from "@/hooks/use-auto-refresh";
 import { ScreenStateCard } from "@/components/ScreenStateCard";
@@ -26,12 +27,17 @@ import { hydrateApiBaseUrl } from "@/services/apiBaseUrl";
 import {
   cacheMonitoringInstance,
   readCachedMonitoringInstance,
+  readCachedMonitoringOverview,
   readCachedOverviewInstance,
 } from "@/services/monitoringCache";
 import {
   controlInstancePower,
-  fetchInstanceMonitoring,
+  fetchMonitoringOverview,
+  getInstanceAlarms,
+  isAlarmActive,
+  sortMonitoringAlarms,
   type InstancePowerAction,
+  type MonitoringAlarm,
   type MonitoringMetricPoint,
   type MonitoringInstance,
   type InstanceState,
@@ -153,6 +159,7 @@ interface TrendMetricsSnapshot {
 }
 
 interface CachedMonitoringResult {
+  alarms: MonitoringAlarm[];
   cachedAt: string | null;
   summaryMonitoring: MonitoringInstance | null;
   trendMonitoring: MonitoringInstance | null;
@@ -525,6 +532,7 @@ export default function InstanceDetailScreen() {
 
   const [timeRange, setTimeRange] = useState<TimeRangeOption>("1h");
   const [monitoring, setMonitoring] = useState<MonitoringInstance | null>(null);
+  const [instanceAlarms, setInstanceAlarms] = useState<MonitoringAlarm[]>([]);
   const [isLoadingMetrics, setIsLoadingMetrics] = useState(true);
   const [metricsError, setMetricsError] = useState<string | null>(null);
   const [isUsingCachedMetrics, setIsUsingCachedMetrics] = useState(false);
@@ -553,6 +561,7 @@ export default function InstanceDetailScreen() {
     monitoring?.updatedAt ?? getLatestHistoryTimestamp(historySnapshot);
   const latestCpuValue =
     monitoring?.cpuPercent ?? historySnapshot.cpu.latestValue;
+  const activeInstanceAlarms = instanceAlarms.filter(isAlarmActive);
   const hasHistory = TREND_METRICS.some(
     (metric) => historySnapshot[metric.key].sampleCount > 0,
   );
@@ -573,6 +582,12 @@ export default function InstanceDetailScreen() {
         return null;
       }
 
+      const cachedOverview = await readCachedMonitoringOverview(
+        configuredApiBaseUrl,
+      );
+      const cachedAlarms = sortMonitoringAlarms(
+        getInstanceAlarms(cachedOverview?.response.alarms ?? [], instanceId),
+      );
       const cachedInstanceRecord = await readCachedMonitoringInstance(
         configuredApiBaseUrl,
         instanceId,
@@ -580,6 +595,7 @@ export default function InstanceDetailScreen() {
       );
       if (cachedInstanceRecord) {
         return {
+          alarms: cachedAlarms,
           cachedAt:
             cachedInstanceRecord.cachedAt ??
             cachedInstanceRecord.monitoring.updatedAt,
@@ -597,6 +613,7 @@ export default function InstanceDetailScreen() {
       }
 
       return {
+        alarms: cachedAlarms,
         cachedAt: cachedOverviewInstance.updatedAt,
         summaryMonitoring: cachedOverviewInstance,
         trendMonitoring: remoteRange === "1h" ? cachedOverviewInstance : null,
@@ -610,6 +627,7 @@ export default function InstanceDetailScreen() {
       if (!instanceId) {
         setMetricsError("This route is missing an instance id.");
         setMonitoring(null);
+        setInstanceAlarms([]);
         setIsUsingCachedMetrics(false);
         setHistorySnapshot(EMPTY_HISTORY_SNAPSHOT);
         setLastRefreshedAt(null);
@@ -624,7 +642,13 @@ export default function InstanceDetailScreen() {
       try {
         activeApiBaseUrl = await hydrateApiBaseUrl();
         setCurrentApiBaseUrl(activeApiBaseUrl);
-        const result = await fetchInstanceMonitoring(instanceId, remoteRange);
+        const response = await fetchMonitoringOverview(remoteRange);
+        const result =
+          response.instances.find((instance) => instance.id === instanceId) ??
+          null;
+        const nextInstanceAlarms = sortMonitoringAlarms(
+          getInstanceAlarms(response.alarms ?? [], instanceId),
+        );
 
         if (!result) {
           const cachedMonitoring = await loadCachedMonitoring(activeApiBaseUrl);
@@ -634,6 +658,9 @@ export default function InstanceDetailScreen() {
 
           setMonitoring(
             (current) => cachedMonitoring?.summaryMonitoring ?? current,
+          );
+          setInstanceAlarms(
+            cachedMonitoring?.alarms ?? nextInstanceAlarms,
           );
           setIsUsingCachedMetrics(Boolean(cachedMonitoring?.summaryMonitoring));
           setLastRefreshedAt(
@@ -651,6 +678,7 @@ export default function InstanceDetailScreen() {
         await cacheMonitoringInstance(activeApiBaseUrl, result, remoteRange);
 
         setMonitoring(result);
+        setInstanceAlarms(nextInstanceAlarms);
         setOptimisticState(null);
         setIsUsingCachedMetrics(false);
         setHistorySnapshot(buildTrendMetricsSnapshot(result));
@@ -664,6 +692,7 @@ export default function InstanceDetailScreen() {
         setMonitoring(
           (current) => cachedMonitoring?.summaryMonitoring ?? current,
         );
+        setInstanceAlarms((current) => cachedMonitoring?.alarms ?? current);
         setIsUsingCachedMetrics(Boolean(cachedMonitoring?.summaryMonitoring));
         setLastRefreshedAt((current) => cachedMonitoring?.cachedAt ?? current);
         setHistorySnapshot(cachedSnapshot);
@@ -690,6 +719,7 @@ export default function InstanceDetailScreen() {
     if (!instanceId) {
       setMetricsError("This route is missing an instance id.");
       setMonitoring(null);
+      setInstanceAlarms([]);
       setIsUsingCachedMetrics(false);
       setHistorySnapshot(EMPTY_HISTORY_SNAPSHOT);
       setLastRefreshedAt(null);
@@ -710,6 +740,7 @@ export default function InstanceDetailScreen() {
       setHistorySnapshot(
         buildTrendMetricsSnapshot(cachedMonitoring?.trendMonitoring ?? null),
       );
+      setInstanceAlarms(cachedMonitoring?.alarms ?? []);
       if (cachedMonitoring?.summaryMonitoring) {
         setMonitoring(cachedMonitoring.summaryMonitoring);
         setIsUsingCachedMetrics(true);
@@ -954,10 +985,16 @@ export default function InstanceDetailScreen() {
             {displayZone || "Unavailable"}
           </Text>
         </View>
-        <View style={styles.summaryRowLast}>
+        <View style={styles.summaryRow}>
           <Text style={styles.summaryLabel}>Updated</Text>
           <Text style={styles.summaryValue}>
             {formatTimestamp(displayUpdatedAt)}
+          </Text>
+        </View>
+        <View style={styles.summaryRowLast}>
+          <Text style={styles.summaryLabel}>AWS alarms</Text>
+          <Text style={styles.summaryValue}>
+            {activeInstanceAlarms.length} active / {instanceAlarms.length} total
           </Text>
         </View>
         <View style={styles.summaryDivider} />
@@ -988,6 +1025,34 @@ export default function InstanceDetailScreen() {
             Last refresh: {formatRefreshTimestamp(lastRefreshedAt)}
           </Text>
         </View>
+      </View>
+
+      <View style={styles.alarmSectionCard}>
+        <View style={styles.alarmSectionHeader}>
+          <Text style={styles.sectionTitle}>AWS Alarm Status</Text>
+          <Text style={styles.alarmSectionSubtitle}>
+            CloudWatch alarms linked to this EC2 instance through its alarm
+            dimensions.
+          </Text>
+        </View>
+
+        {instanceAlarms.length ? (
+          <View style={styles.alarmList}>
+            {instanceAlarms.map((alarm, index) => (
+              <AlarmFeedCard
+                key={`${alarm.alarmName}-${alarm.updatedAt ?? "unknown"}-${index}`}
+                alarm={alarm}
+              />
+            ))}
+          </View>
+        ) : (
+          <ScreenStateCard
+            compact
+            variant="empty"
+            title="No CloudWatch alarms"
+            message="AWS did not return any CloudWatch alarms linked to this instance."
+          />
+        )}
       </View>
 
       <View style={styles.powerActionsCard}>
@@ -1424,6 +1489,25 @@ const styles = StyleSheet.create({
   liveRefreshMeta: {
     fontSize: 12,
     color: "#475569",
+  },
+  alarmSectionCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    gap: 14,
+  },
+  alarmSectionHeader: {
+    gap: 6,
+  },
+  alarmSectionSubtitle: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: "#475569",
+  },
+  alarmList: {
+    gap: 12,
   },
   statePill: {
     paddingHorizontal: 10,

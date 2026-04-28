@@ -31,12 +31,25 @@ export interface MonitoringInstance extends InstanceSummary {
   updatedAt: string;
 }
 
+export interface MonitoringAlarmDimension {
+  name: string;
+  value: string;
+}
+
 export interface MonitoringAlarm {
   alarmName: string;
   state: string;
   metric: string;
   namespace: string;
-  threshold: number;
+  threshold: number | null;
+  comparisonOperator: string | null;
+  evaluationPeriods: number | null;
+  description: string | null;
+  stateReason: string | null;
+  updatedAt: string | null;
+  instanceId: string | null;
+  instanceName: string | null;
+  dimensions: MonitoringAlarmDimension[];
 }
 
 export interface MonitoringResponse {

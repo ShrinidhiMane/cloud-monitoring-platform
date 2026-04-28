@@ -2,6 +2,7 @@ import { getApiBaseUrl, getMonitoringUrl } from "./constants";
 import type {
   InstancePowerAction,
   InstancePowerResponse,
+  MonitoringAlarmDimension,
   InstanceState,
   MonitoringAlarm,
   MonitoringMetricPoint,
@@ -101,6 +102,19 @@ interface MonitoringAlarmResponse {
   metric?: string;
   namespace?: string;
   threshold?: number;
+  comparisonOperator?: string;
+  evaluationPeriods?: number;
+  description?: string;
+  stateReason?: string;
+  updatedAt?: string;
+  instanceId?: string;
+  instanceName?: string;
+  dimensions?: MonitoringAlarmDimensionResponse[];
+}
+
+interface MonitoringAlarmDimensionResponse {
+  name?: string;
+  value?: string;
 }
 
 interface MonitoringInstanceResponse {
@@ -315,24 +329,82 @@ function normalizeMonitoringStatus(value?: string): MonitoringStatus {
   return "unknown";
 }
 
+function normalizeAlarmTimestamp(value?: string): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+
+  return parsed.toISOString();
+}
+
+function normalizeMonitoringAlarmDimensions(
+  dimensions: MonitoringAlarmDimensionResponse[] = [],
+): MonitoringAlarmDimension[] {
+  return dimensions
+    .filter(
+      (dimension): dimension is Required<MonitoringAlarmDimensionResponse> =>
+        typeof dimension.name === "string" &&
+        typeof dimension.value === "string" &&
+        dimension.name.trim().length > 0 &&
+        dimension.value.trim().length > 0,
+    )
+    .map((dimension) => ({
+      name: dimension.name.trim(),
+      value: dimension.value.trim(),
+    }));
+}
+
 function normalizeMonitoringAlarms(
   alarms: MonitoringAlarmResponse[] = [],
 ): MonitoringAlarm[] {
   return alarms
     .filter(
-      (alarm): alarm is Required<MonitoringAlarmResponse> =>
+      (alarm): alarm is MonitoringAlarmResponse =>
         typeof alarm.alarmName === "string" &&
         typeof alarm.state === "string" &&
         typeof alarm.metric === "string" &&
-        typeof alarm.namespace === "string" &&
-        typeof alarm.threshold === "number",
+        typeof alarm.namespace === "string",
     )
     .map((alarm) => ({
-      alarmName: alarm.alarmName,
-      state: alarm.state,
-      metric: alarm.metric,
-      namespace: alarm.namespace,
-      threshold: alarm.threshold,
+      alarmName: alarm.alarmName!.trim(),
+      state: alarm.state!.trim(),
+      metric: alarm.metric!.trim(),
+      namespace: alarm.namespace!.trim(),
+      threshold:
+        typeof alarm.threshold === "number"
+          ? roundMetricValue(alarm.threshold)
+          : null,
+      comparisonOperator:
+        typeof alarm.comparisonOperator === "string"
+          ? alarm.comparisonOperator.trim()
+          : null,
+      evaluationPeriods:
+        typeof alarm.evaluationPeriods === "number"
+          ? alarm.evaluationPeriods
+          : null,
+      description:
+        typeof alarm.description === "string" && alarm.description.trim()
+          ? alarm.description.trim()
+          : null,
+      stateReason:
+        typeof alarm.stateReason === "string" && alarm.stateReason.trim()
+          ? alarm.stateReason.trim()
+          : null,
+      updatedAt: normalizeAlarmTimestamp(alarm.updatedAt),
+      instanceId:
+        typeof alarm.instanceId === "string" && alarm.instanceId.trim()
+          ? alarm.instanceId.trim()
+          : null,
+      instanceName:
+        typeof alarm.instanceName === "string" && alarm.instanceName.trim()
+          ? alarm.instanceName.trim()
+          : null,
+      dimensions: normalizeMonitoringAlarmDimensions(alarm.dimensions),
     }));
 }
 

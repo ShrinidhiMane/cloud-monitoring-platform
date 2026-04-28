@@ -49,10 +49,10 @@ function getShellContext(pathname: string, view: ShellView) {
 
   if (view === "alerts") {
     return {
-      eyebrow: "Priority View",
+      eyebrow: "CloudWatch Queue",
       title: "Alert Queue",
       subtitle:
-        "Focus on instances with elevated CPU or memory pressure and jump directly into the detail graph from there.",
+        "Review live AWS CloudWatch alarms first, then move straight into the affected instance and its metric history.",
       actions: [
         { label: "Fleet Overview", to: "/instances", primary: false },
         {
@@ -81,7 +81,7 @@ function getShellContext(pathname: string, view: ShellView) {
     eyebrow: "Command Surface",
     title: "Fleet Navigation",
     subtitle:
-      "Use the web console to move from the fleet overview into live instance graphs and recent operational activity.",
+      "Use the web console to move from the fleet overview into live CloudWatch alarms, detail graphs, and recent operational activity.",
     actions: [
       { label: "Open Alerts", to: "/instances?view=alerts", primary: false },
       {
@@ -188,7 +188,8 @@ export default function Layout() {
         <Outlet />
       </main>
       <footer className="footer">
-        <strong>Cloud Infrastructure Monitoring</strong> - Sprint 1 UI scaffold
+        <strong>Cloud Infrastructure Monitoring</strong> - AWS CloudWatch alarm
+        feed enabled
       </footer>
     </div>
   );

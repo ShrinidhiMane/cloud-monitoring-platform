@@ -14,7 +14,11 @@ import { useFocusEffect } from "@react-navigation/native";
 import { InstanceCard } from "@/components/InstanceCard";
 import { ScreenStateCard } from "@/components/ScreenStateCard";
 import { useAutoRefresh, type RefreshReason } from "@/hooks/use-auto-refresh";
-import { buildInstanceDetailRoute, SETTINGS_ROUTE } from "@/navigation/routes";
+import {
+  ALERTS_ROUTE,
+  buildInstanceDetailRoute,
+  SETTINGS_ROUTE,
+} from "@/navigation/routes";
 import { hydrateApiBaseUrl } from "@/services/apiBaseUrl";
 import {
   readFavoriteInstanceIds,
@@ -26,10 +30,16 @@ import {
 } from "@/services/monitoringCache";
 import type {
   InstanceState,
+  MonitoringAlarm,
   MonitoringInstance,
   MonitoringResponse,
 } from "api-client";
-import { fetchMonitoringOverview } from "api-client";
+import {
+  fetchMonitoringOverview,
+  getAlarmInstanceId,
+  isAlarmActive,
+  sortMonitoringAlarms,
+} from "api-client";
 // Polling interval for live EC2 instance data refresh
 
 const POLL_INTERVAL_MS = 30_000;
@@ -58,12 +68,13 @@ const FILTER_OPTIONS: Array<{ label: string; value: InstanceFilter }> = [
 const SUMMARY_ITEMS: Array<{
   icon: React.ComponentProps<typeof MaterialCommunityIcons>["name"];
   label: string;
-  tone: "slate" | "green" | "amber" | "gold";
+  tone: "slate" | "green" | "amber" | "gold" | "rose";
 }> = [
   { icon: "server-outline", label: "Total", tone: "slate" },
   { icon: "play-circle-outline", label: "Running", tone: "green" },
   { icon: "pause-circle-outline", label: "Stopped", tone: "amber" },
   { icon: "star-outline", label: "Favorites", tone: "gold" },
+  { icon: "bell-alert-outline", label: "AWS Alarms", tone: "rose" },
 ];
 
 const SUMMARY_TONES = {
@@ -71,6 +82,7 @@ const SUMMARY_TONES = {
   green: { background: "#EAFBF2", icon: "#15803D" },
   amber: { background: "#FFF7E8", icon: "#B45309" },
   gold: { background: "#FFF8DB", icon: "#B7791F" },
+  rose: { background: "#FEF2F2", icon: "#B91C1C" },
 } as const;
 
 function ItemSeparator() {
@@ -142,6 +154,7 @@ function compareInstances(
 export default function InstancesScreen() {
   const router = useRouter();
   const [instances, setInstances] = useState<MonitoringInstance[]>([]);
+  const [alarms, setAlarms] = useState<MonitoringAlarm[]>([]);
   const [favoriteIds, setFavoriteIds] = useState<string[]>([]);
   const [activeApiBaseUrl, setActiveApiBaseUrl] = useState("");
   const [isLoading, setIsLoading] = useState(true);
@@ -182,6 +195,7 @@ export default function InstancesScreen() {
     }
 
     setInstances(cachedOverview.response.instances);
+    setAlarms(sortMonitoringAlarms(cachedOverview.response.alarms ?? []));
     setLastUpdatedAt(
       cachedOverview.response.timestamp ?? cachedOverview.cachedAt,
     );
@@ -212,6 +226,7 @@ export default function InstancesScreen() {
       }
 
       setInstances(cachedOverview.response.instances);
+      setAlarms(sortMonitoringAlarms(cachedOverview.response.alarms ?? []));
       setLastUpdatedAt(
         cachedOverview.response.timestamp ?? cachedOverview.cachedAt,
       );
@@ -246,6 +261,7 @@ export default function InstancesScreen() {
         loadedCachedOverview = await loadCachedOverview(apiBaseUrl);
         if (!loadedCachedOverview) {
           setInstances([]);
+          setAlarms([]);
           setLastUpdatedAt(null);
           setIsUsingCachedData(false);
         }
@@ -271,6 +287,7 @@ export default function InstancesScreen() {
         hasLoadedLiveOverviewRef.current = true;
         const liveInstances = instancesResponse.instances ?? [];
         setInstances(liveInstances);
+        setAlarms(sortMonitoringAlarms(instancesResponse.alarms ?? []));
         setIsUsingCachedData(false);
         setLastUpdatedAt(
           instancesResponse.timestamp ?? new Date().toISOString(),
@@ -325,6 +342,10 @@ export default function InstancesScreen() {
     router.push(SETTINGS_ROUTE);
   }, [router]);
 
+  const handleOpenAlerts = useCallback(() => {
+    router.push(ALERTS_ROUTE);
+  }, [router]);
+
   const handleToggleFavorite = useCallback(async (instanceId: string) => {
     setFavoriteIds(await toggleFavoriteInstance(instanceId));
   }, []);
@@ -336,6 +357,21 @@ export default function InstancesScreen() {
   }, []);
 
   const favoriteIdSet = new Set(favoriteIds);
+  const sortedAlarms = sortMonitoringAlarms(alarms);
+  const activeAlarms = sortedAlarms.filter(isAlarmActive);
+  const activeAlarmCountByInstance = new Map<string, number>();
+  for (const alarm of activeAlarms) {
+    const linkedInstanceId = getAlarmInstanceId(alarm);
+    if (!linkedInstanceId) {
+      continue;
+    }
+
+    activeAlarmCountByInstance.set(
+      linkedInstanceId,
+      (activeAlarmCountByInstance.get(linkedInstanceId) ?? 0) + 1,
+    );
+  }
+  const topAlarm = activeAlarms[0] ?? null;
   const filteredInstances = [...instances]
     .filter((instance) => {
       if (showFavoritesOnly && !favoriteIdSet.has(instance.id)) {
@@ -361,7 +397,13 @@ export default function InstancesScreen() {
   ).length;
   const shouldShowStatusCard =
     hasInstances || isRefreshing || isAutoRefreshing || lastUpdatedAt !== null;
-  const summaryValues = [instances.length, runningCount, stoppedCount, favoriteCount];
+  const summaryValues = [
+    instances.length,
+    runningCount,
+    stoppedCount,
+    favoriteCount,
+    activeAlarms.length,
+  ];
 
   const renderItem = ({ item }: { item: MonitoringInstance }) => (
     <Pressable
@@ -383,6 +425,7 @@ export default function InstancesScreen() {
       ]}
     >
       <InstanceCard
+        activeAlarmCount={activeAlarmCountByInstance.get(item.id) ?? 0}
         instance={item}
         isFavorite={favoriteIdSet.has(item.id)}
         onToggleFavorite={handleToggleFavorite}
@@ -558,6 +601,51 @@ export default function InstancesScreen() {
           </View>
         </View>
       ) : null}
+
+      <View
+        style={[
+          styles.alertSummaryCard,
+          activeAlarms.length
+            ? styles.alertSummaryCardActive
+            : styles.alertSummaryCardHealthy,
+        ]}
+      >
+        <View style={styles.alertSummaryHeader}>
+          <View style={styles.alertSummaryTitleRow}>
+            <MaterialCommunityIcons
+              color={activeAlarms.length ? "#B91C1C" : "#15803D"}
+              name={
+                activeAlarms.length
+                  ? "bell-alert-outline"
+                  : "bell-check-outline"
+              }
+              size={18}
+            />
+            <Text style={styles.alertSummaryLabel}>AWS Alarm Feed</Text>
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            onPress={handleOpenAlerts}
+            style={({ pressed }) => [
+              styles.alertSummaryButton,
+              pressed && styles.alertSummaryButtonPressed,
+            ]}
+          >
+            <Text style={styles.alertSummaryButtonText}>Open Alerts</Text>
+          </Pressable>
+        </View>
+
+        <Text style={styles.alertSummaryHeadline}>
+          {activeAlarms.length
+            ? `${activeAlarms.length} active CloudWatch alarm${activeAlarms.length === 1 ? "" : "s"} need review`
+            : "No active CloudWatch alarms are firing right now"}
+        </Text>
+        <Text style={styles.alertSummaryText}>
+          {topAlarm
+            ? `${topAlarm.alarmName} is currently the highest-priority AWS alarm for ${topAlarm.instanceName ?? topAlarm.instanceId ?? `${topAlarm.namespace} / ${topAlarm.metric}`}.`
+            : "Use the Alerts tab to review the full CloudWatch alarm feed and jump into any affected EC2 instance."}
+        </Text>
+      </View>
     </View>
   );
 
@@ -855,6 +943,62 @@ const styles = StyleSheet.create({
   },
   statusMetaTextError: {
     color: "#991B1B",
+  },
+  alertSummaryCard: {
+    borderRadius: 22,
+    borderWidth: 1,
+    padding: 16,
+    gap: 10,
+  },
+  alertSummaryCardActive: {
+    backgroundColor: "#FEF2F2",
+    borderColor: "#FECACA",
+  },
+  alertSummaryCardHealthy: {
+    backgroundColor: "#ECFDF5",
+    borderColor: "#BBF7D0",
+  },
+  alertSummaryHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  alertSummaryTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  alertSummaryLabel: {
+    fontSize: 12,
+    fontWeight: "800",
+    letterSpacing: 0.7,
+    textTransform: "uppercase",
+    color: "#0F172A",
+  },
+  alertSummaryHeadline: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#0F172A",
+  },
+  alertSummaryText: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: "#334155",
+  },
+  alertSummaryButton: {
+    borderRadius: 999,
+    backgroundColor: "#0F172A",
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  alertSummaryButtonPressed: {
+    opacity: 0.88,
+  },
+  alertSummaryButtonText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#F8FAFC",
   },
   listContent: {
     paddingHorizontal: 20,
