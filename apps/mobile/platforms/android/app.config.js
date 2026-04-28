@@ -1,8 +1,12 @@
 // @ts-check
 
 /**
- * @type {import("expo/config").ExpoConfig["android"]}
+ * @typedef {import("expo/config").ExpoConfig["android"] & {
+ *   usesCleartextTraffic?: boolean;
+ * }} AndroidConfigWithCleartext
  */
+
+/** @type {AndroidConfigWithCleartext} */
 const androidConfig =  {
   adaptiveIcon: {
     foregroundImage: "./assets/adaptive-icon.png",

@@ -6,7 +6,14 @@ import {
   useState,
 } from "react";
 import { Link, useParams } from "react-router-dom";
-import { fetchInstanceMonitoring, type MonitoringInstance } from "api-client";
+import {
+  fetchMonitoringOverview,
+  getInstanceAlarms,
+  isAlarmActive,
+  sortMonitoringAlarms,
+  type MonitoringAlarm,
+  type MonitoringInstance,
+} from "api-client";
 import CpuLineChart from "../components/CpuLineChart";
 
 type TimeRangeOption = "15m" | "1h" | "6h" | "24h";
@@ -29,6 +36,16 @@ function formatCompactNumber(value: number) {
   return new Intl.NumberFormat("en-US", {
     notation: "compact",
     maximumFractionDigits: 1,
+  }).format(value);
+}
+
+function formatThreshold(value: number | null) {
+  if (typeof value !== "number") {
+    return "n/a";
+  }
+
+  return new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 2,
   }).format(value);
 }
 
@@ -61,6 +78,7 @@ export default function InstanceDetail() {
   const { instanceId } = useParams();
   const [timeRange, setTimeRange] = useState<TimeRangeOption>("1h");
   const [monitoring, setMonitoring] = useState<MonitoringInstance | null>(null);
+  const [instanceAlarms, setInstanceAlarms] = useState<MonitoringAlarm[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -69,6 +87,7 @@ export default function InstanceDetail() {
   const loadMonitoring = useEffectEvent(async (backgroundRefresh = false) => {
     if (!instanceId) {
       setMonitoring(null);
+      setInstanceAlarms([]);
       setError("Missing instance id.");
       setIsLoading(false);
       setIsRefreshing(false);
@@ -82,10 +101,17 @@ export default function InstanceDetail() {
     }
 
     try {
-      const result = await fetchInstanceMonitoring(instanceId, timeRange);
+      const response = await fetchMonitoringOverview(timeRange);
+      const result =
+        response.instances.find((instance) => instance.id === instanceId) ??
+        null;
+      const nextInstanceAlarms = sortMonitoringAlarms(
+        getInstanceAlarms(response.alarms, instanceId),
+      );
 
       startTransition(() => {
         setMonitoring(result);
+        setInstanceAlarms(nextInstanceAlarms);
         setError(
           result
             ? null
@@ -138,11 +164,16 @@ export default function InstanceDetail() {
   const peakCpu = sampleCount
     ? Math.max(...deferredCpuSeries.map((point) => point.value))
     : 0;
+  const activeInstanceAlarms = instanceAlarms.filter(isAlarmActive);
   const title = monitoring?.name ?? instanceId ?? "Instance";
   const refreshLabel = isRefreshing
     ? "Refreshing now"
     : `Last sample ${formatAge(monitoring?.updatedAt)}`;
   const recentMetrics = [
+    {
+      label: "AWS Alarms",
+      value: `${activeInstanceAlarms.length} active / ${instanceAlarms.length} total`,
+    },
     {
       label: "Network Out",
       value: formatCompactNumber(monitoring?.networkOutBytes ?? 0),
@@ -175,8 +206,8 @@ export default function InstanceDetail() {
             <div className="eyebrow">Instance Detail</div>
             <h1 className="page-title">{title}</h1>
             <p className="page-subtitle">
-              Near real-time CPU graph with automatic refreshes every 15
-              seconds.
+              Near real-time metric history with automatic refreshes every 15
+              seconds and AWS alarm context for this EC2 instance.
             </p>
           </div>
           <div className="header-actions">
@@ -199,6 +230,9 @@ export default function InstanceDetail() {
           </a>
           <a className="page-nav-link" href="#cpu-chart">
             CPU Graph
+          </a>
+          <a className="page-nav-link" href="#alarm-status">
+            Alarm Status
           </a>
           <a className="page-nav-link" href="#recent-metrics">
             Recent Metrics
@@ -229,6 +263,13 @@ export default function InstanceDetail() {
               {formatPercent(monitoring?.memoryPercent ?? 0)}
             </div>
             <p className="detail-caption">Latest CWAgent memory percentage.</p>
+          </div>
+          <div className="detail-card">
+            <div className="panel-title">AWS Alarms</div>
+            <div className="detail-value">{activeInstanceAlarms.length}</div>
+            <p className="detail-caption">
+              Firing CloudWatch alarms currently attached to this instance.
+            </p>
           </div>
         </div>
       </section>
@@ -261,7 +302,7 @@ export default function InstanceDetail() {
             ? error
             : isLoading && !monitoring
               ? "Loading monitoring data..."
-              : `${sampleCount} CPU samples loaded. ${refreshLabel}.`}
+              : `${sampleCount} CPU samples loaded. ${activeInstanceAlarms.length} active AWS alarm${activeInstanceAlarms.length === 1 ? "" : "s"}. ${refreshLabel}.`}
         </div>
 
         {isLoading && !monitoring ? (
@@ -296,6 +337,64 @@ export default function InstanceDetail() {
             <div className="metric-note">Bytes in the latest period</div>
           </div>
         </div>
+      </section>
+
+      <section className="panel" id="alarm-status">
+        <div className="panel-header">
+          <div>
+            <div className="panel-title">AWS Alarm Status</div>
+            <p className="page-subtitle">
+              These CloudWatch alarms are linked to the current EC2 instance by
+              its alarm dimensions.
+            </p>
+          </div>
+          <div className={`status-inline${activeInstanceAlarms.length ? " error" : ""}`}>
+            {activeInstanceAlarms.length} active / {instanceAlarms.length} total
+          </div>
+        </div>
+
+        {instanceAlarms.length ? (
+          <div className="alarm-list">
+            {instanceAlarms.map((alarm) => (
+              <article
+                key={`${alarm.alarmName}-${alarm.updatedAt ?? "unknown"}`}
+                className="alarm-card"
+              >
+                <div className="alarm-header">
+                  <div>
+                    <div className="instance-name">{alarm.alarmName}</div>
+                    <div className="instance-id">
+                      {alarm.namespace} / {alarm.metric}
+                    </div>
+                  </div>
+                  <span
+                    className="alarm-state-pill"
+                    data-alarm-state={alarm.state}
+                  >
+                    {alarm.state}
+                  </span>
+                </div>
+                <div className="instance-meta">
+                  <div>Threshold: {formatThreshold(alarm.threshold)}</div>
+                  <div>
+                    Operator: {alarm.comparisonOperator ?? "not provided"}
+                  </div>
+                  <div>
+                    Periods: {alarm.evaluationPeriods ?? "not provided"}
+                  </div>
+                  <div>Updated: {formatAge(alarm.updatedAt)}</div>
+                </div>
+                {alarm.stateReason ? (
+                  <div className="alarm-reason">{alarm.stateReason}</div>
+                ) : null}
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="cpu-chart-empty">
+            No CloudWatch alarms are currently attached to this instance.
+          </div>
+        )}
       </section>
 
       <section className="panel" id="recent-metrics">

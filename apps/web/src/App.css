@@ -382,6 +382,65 @@
   margin-bottom: 4px;
 }
 
+.alarm-list {
+  display: grid;
+  gap: 14px;
+}
+
+.alarm-card {
+  padding: 18px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: linear-gradient(
+    150deg,
+    rgba(255, 255, 255, 0.95),
+    rgba(248, 250, 252, 0.9)
+  );
+  display: grid;
+  gap: 14px;
+}
+
+.alarm-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.alarm-state-pill {
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.alarm-state-pill[data-alarm-state="ALARM"] {
+  background: rgba(220, 38, 38, 0.12);
+  color: #b91c1c;
+}
+
+.alarm-state-pill[data-alarm-state="INSUFFICIENT_DATA"] {
+  background: rgba(245, 158, 11, 0.14);
+  color: #b45309;
+}
+
+.alarm-state-pill[data-alarm-state="OK"] {
+  background: rgba(22, 163, 74, 0.12);
+  color: #15803d;
+}
+
+.alarm-reason {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(246, 241, 232, 0.7);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
 .spotlight-card {
   display: grid;
   gap: 16px;
@@ -495,6 +554,17 @@
   height: 100%;
   border-radius: inherit;
   background: linear-gradient(90deg, var(--accent), var(--accent-2));
+}
+
+.alarm-inline-badge {
+  align-self: flex-start;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(220, 38, 38, 0.08);
+  border: 1px solid rgba(220, 38, 38, 0.16);
+  color: #b91c1c;
+  font-size: 0.78rem;
+  font-weight: 700;
 }
 
 .card-actions {

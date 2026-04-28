@@ -3,6 +3,7 @@ import type { InstanceState } from "api-client";
 
 export const TABS_GROUP_NAME = "(tabs)";
 export const TABS_ROOT_ROUTE = "/(tabs)" as Href;
+export const ALERTS_ROUTE = "/(tabs)/alerts" as Href;
 export const SETTINGS_ROUTE = "/(tabs)/settings" as Href;
 export const AWS_SETUPS_ROUTE = "/aws-setups" as Href;
 export const DEVICE_SECURITY_ROUTE = "/device-security" as Href;

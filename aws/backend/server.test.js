@@ -114,6 +114,12 @@ const buildClients = (overrides = {}) => {
             MetricName: "CPUUtilization",
             Namespace: "AWS/EC2",
             Threshold: 80,
+            ComparisonOperator: "GreaterThanThreshold",
+            EvaluationPeriods: 2,
+            AlarmDescription: "Alerts when CPU stays elevated.",
+            StateReason: "Threshold not crossed.",
+            StateUpdatedTimestamp: "2026-03-27T12:05:00.000Z",
+            Dimensions: [{ Name: "InstanceId", Value: "i-1234567890" }],
           },
         ],
       }),
@@ -177,6 +183,28 @@ test("GET /monitoring returns aggregated EC2 and S3 data", async () => {
   assert.equal(response.body.alarms.length, 1);
   assert.equal(response.body.alarms[0].alarmName, "HighCPUAlarm");
   assert.equal(response.body.alarms[0].state, "OK");
+  assert.equal(response.body.alarms[0].instanceId, "i-1234567890");
+  assert.equal(response.body.alarms[0].instanceName, "web-01");
+  assert.equal(
+    response.body.alarms[0].comparisonOperator,
+    "GreaterThanThreshold",
+  );
+  assert.equal(response.body.alarms[0].evaluationPeriods, 2);
+  assert.equal(
+    response.body.alarms[0].description,
+    "Alerts when CPU stays elevated.",
+  );
+  assert.equal(
+    response.body.alarms[0].stateReason,
+    "Threshold not crossed.",
+  );
+  assert.equal(
+    response.body.alarms[0].updatedAt,
+    "2026-03-27T12:05:00.000Z",
+  );
+  assert.deepEqual(response.body.alarms[0].dimensions, [
+    { name: "InstanceId", value: "i-1234567890" },
+  ]);
 });
 
 test("POST /instances/:instanceId/power validates action", async () => {

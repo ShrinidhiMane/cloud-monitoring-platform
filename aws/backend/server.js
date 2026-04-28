@@ -68,6 +68,19 @@ function toIsoTimestamp(timestamp) {
     : new Date(timestamp).toISOString();
 }
 
+function toNullableIsoTimestamp(timestamp) {
+  if (!timestamp) {
+    return null;
+  }
+
+  const parsed = new Date(timestamp);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+
+  return parsed.toISOString();
+}
+
 function buildMetricSeries(datapoints = [], metricKey) {
   return sortDatapoints(datapoints).map((point) => ({
     timestamp: toIsoTimestamp(point.Timestamp),
@@ -106,6 +119,42 @@ function getSecurityGroupNames(instance) {
   return (instance.SecurityGroups ?? [])
     .map((group) => group.GroupName ?? group.GroupId)
     .filter(Boolean);
+}
+
+function normalizeAlarmDimensions(dimensions = []) {
+  return dimensions
+    .filter(
+      (dimension) =>
+        typeof dimension?.Name === "string" &&
+        dimension.Name.trim() &&
+        typeof dimension?.Value === "string" &&
+        dimension.Value.trim(),
+    )
+    .map((dimension) => ({
+      name: dimension.Name.trim(),
+      value: dimension.Value.trim(),
+    }));
+}
+
+function getAlarmInstanceId(dimensions = []) {
+  const dimension = normalizeAlarmDimensions(dimensions).find(
+    (item) => item.name.toLowerCase() === "instanceid",
+  );
+
+  return dimension?.value ?? null;
+}
+
+function getAlarmSortPriority(state) {
+  switch (state) {
+    case "ALARM":
+      return 0;
+    case "INSUFFICIENT_DATA":
+      return 1;
+    case "OK":
+      return 2;
+    default:
+      return 99;
+  }
 }
 
 async function safeAwsCall(fn, fallback) {
@@ -438,19 +487,62 @@ export const createApp = (clients = createAwsClients()) => {
         loadSecurityGroups(ec2),
       ]);
 
+      const instanceNameById = new Map(
+        instances.map((instance) => [instance.id, instance.name]),
+      );
+
       // Fetch CloudWatch alarms
       const alarmData = await safeAwsCall(
         () => cloudwatch.describeAlarms().promise(),
         { MetricAlarms: [] },
       );
 
-      const alarms = (alarmData.MetricAlarms || []).map((alarm) => ({
-        alarmName: alarm.AlarmName,
-        state: alarm.StateValue,
-        metric: alarm.MetricName,
-        namespace: alarm.Namespace,
-        threshold: alarm.Threshold,
-      }));
+      const alarms = (alarmData.MetricAlarms || [])
+        .map((alarm) => {
+          const dimensions = normalizeAlarmDimensions(alarm.Dimensions);
+          const instanceId = getAlarmInstanceId(alarm.Dimensions);
+
+          return {
+            alarmName: alarm.AlarmName ?? "Unnamed alarm",
+            state: alarm.StateValue ?? "UNKNOWN",
+            metric: alarm.MetricName ?? "unknown-metric",
+            namespace: alarm.Namespace ?? "unknown-namespace",
+            threshold:
+              typeof alarm.Threshold === "number"
+                ? roundMetricValue(alarm.Threshold)
+                : null,
+            comparisonOperator: alarm.ComparisonOperator ?? null,
+            evaluationPeriods:
+              typeof alarm.EvaluationPeriods === "number"
+                ? alarm.EvaluationPeriods
+                : null,
+            description: alarm.AlarmDescription?.trim() || null,
+            stateReason: alarm.StateReason?.trim() || null,
+            updatedAt: toNullableIsoTimestamp(alarm.StateUpdatedTimestamp),
+            instanceId,
+            instanceName: instanceId
+              ? instanceNameById.get(instanceId) ?? null
+              : null,
+            dimensions,
+          };
+        })
+        .sort((left, right) => {
+          const priorityDifference =
+            getAlarmSortPriority(left.state) - getAlarmSortPriority(right.state);
+          if (priorityDifference !== 0) {
+            return priorityDifference;
+          }
+
+          const leftUpdatedAt = left.updatedAt ? Date.parse(left.updatedAt) : 0;
+          const rightUpdatedAt = right.updatedAt
+            ? Date.parse(right.updatedAt)
+            : 0;
+          if (leftUpdatedAt !== rightUpdatedAt) {
+            return rightUpdatedAt - leftUpdatedAt;
+          }
+
+          return left.alarmName.localeCompare(right.alarmName);
+        });
 
       // Derive overall health status; degrade if any alarm is firing
       let overallStatus = "healthy";

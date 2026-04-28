@@ -17,6 +17,7 @@ export {
 };
 
 export * from "./api";
+export * from "./alarms";
 export { createApiClient } from "./openapi/client";
 export type { ApiClient } from "./openapi/client";
 export type { paths as OpenApiPaths } from "./openapi/schema";

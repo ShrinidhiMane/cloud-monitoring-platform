@@ -1,6 +1,14 @@
 import { startTransition, useEffect, useEffectEvent, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { fetchMonitoringOverview, type MonitoringInstance } from "api-client";
+import {
+  fetchMonitoringOverview,
+  getInstanceAlarms,
+  isAlarmActive,
+  sortMonitoringAlarms,
+  type MonitoringAlarm,
+  type MonitoringInstance,
+  type MonitoringStatus,
+} from "api-client";
 
 const POLL_INTERVAL_MS = 30000;
 
@@ -19,16 +27,16 @@ const VIEW_COPY: Record<
     eyebrow: "Infrastructure Overview",
     title: "Instance Control Center",
     subtitle:
-      "Monitor live instance health, follow CPU and memory pressure, and jump directly into the detail graph.",
+      "Monitor live instance health, review AWS CloudWatch alarm state, and jump directly into the detail graph.",
     emptyState: "No running instances were returned by the monitoring API.",
   },
   alerts: {
-    eyebrow: "Focused Queue",
-    title: "Instances Requiring Attention",
+    eyebrow: "CloudWatch Alarms",
+    title: "Instances With Active AWS Alarms",
     subtitle:
-      "This view filters the fleet down to CPU or memory hotspots so the next click takes you straight to the right graph.",
+      "This queue is driven by live CloudWatch alarm state instead of inferred CPU thresholds so you can work from the real AWS signal first.",
     emptyState:
-      "No instances are currently breaching the CPU or memory watch threshold.",
+      "No instance-linked CloudWatch alarms are firing right now.",
   },
   activity: {
     eyebrow: "Recent Activity",
@@ -78,8 +86,33 @@ function formatAge(timestamp?: string | null) {
   return `${Math.floor(diffHours / 24)}d ago`;
 }
 
-function isAlerting(instance: MonitoringInstance) {
-  return instance.cpuPercent >= 80 || instance.memoryPercent >= 80;
+function formatThreshold(value: number | null) {
+  if (typeof value !== "number") {
+    return "n/a";
+  }
+
+  return new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
+function formatAlarmTarget(alarm: MonitoringAlarm) {
+  return (
+    alarm.instanceName ??
+    alarm.instanceId ??
+    `${alarm.namespace} / ${alarm.metric}`
+  );
+}
+
+function formatFleetStatus(status: MonitoringStatus) {
+  switch (status) {
+    case "healthy":
+      return "Healthy";
+    case "degraded":
+      return "Degraded";
+    default:
+      return "Unknown";
+  }
 }
 
 function parseUpdatedAt(timestamp?: string) {
@@ -95,6 +128,8 @@ export default function Instances() {
   const [searchParams] = useSearchParams();
   const currentView = getInstancesView(searchParams.get("view"));
   const [instances, setInstances] = useState<MonitoringInstance[]>([]);
+  const [alarms, setAlarms] = useState<MonitoringAlarm[]>([]);
+  const [fleetStatus, setFleetStatus] = useState<MonitoringStatus>("unknown");
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
@@ -109,6 +144,8 @@ export default function Instances() {
 
       startTransition(() => {
         setInstances(response.instances);
+        setAlarms(response.alarms);
+        setFleetStatus(response.status);
         setLastUpdated(response.timestamp);
         setError(null);
       });
@@ -146,7 +183,17 @@ export default function Instances() {
       right.cpuPercent - left.cpuPercent
     );
   });
-  const alertedInstances = sortedByActivity.filter(isAlerting);
+  const sortedAlarms = sortMonitoringAlarms(alarms);
+  const activeAlarms = sortedAlarms.filter(isAlarmActive);
+  const alertedInstances = sortedByActivity.filter((instance) => {
+    return getInstanceAlarms(activeAlarms, instance.id).length > 0;
+  });
+  const activeAlarmCountByInstance = new Map(
+    alertedInstances.map((instance) => [
+      instance.id,
+      getInstanceAlarms(activeAlarms, instance.id).length,
+    ]),
+  );
   const displayInstances =
     currentView === "alerts"
       ? alertedInstances
@@ -154,28 +201,29 @@ export default function Instances() {
         ? sortedByActivity
         : instances;
   const recentActivity = sortedByActivity.slice(0, 4);
-  const topAlert = alertedInstances[0] ?? null;
+  const topAlarm = activeAlarms[0] ?? null;
   const runningCount = instances.filter(
     (instance) => instance.state === "running",
   ).length;
   const stoppedCount = instances.filter(
     (instance) => instance.state === "stopped",
   ).length;
-  const pendingCount = instances.filter(
-    (instance) => instance.state === "pending",
-  ).length;
   const statCards = [
     { label: "Running", value: String(runningCount) },
     { label: "Stopped", value: String(stoppedCount) },
-    { label: "Pending", value: String(pendingCount) },
-    { label: "Alerts", value: String(alertedInstances.length) },
+    { label: "Alarmed Instances", value: String(alertedInstances.length) },
+    { label: "AWS Alarms", value: String(activeAlarms.length) },
   ];
+  const viewCopy = VIEW_COPY[currentView];
+  const emptyQueueText =
+    currentView === "alerts" && activeAlarms.length > 0
+      ? "AWS alarms are active, but none of the firing alarms currently include an EC2 instance dimension that matches this fleet view."
+      : error ?? viewCopy.emptyState;
   const statusText = error
     ? error
     : isLoading && !instances.length
       ? "Loading live EC2 metrics..."
-      : `Last sync ${formatAge(lastUpdated)}. Refreshes every 30s.`;
-  const viewCopy = VIEW_COPY[currentView];
+      : `${formatFleetStatus(fleetStatus)} status. Last sync ${formatAge(lastUpdated)}. ${activeAlarms.length} active AWS alarm${activeAlarms.length === 1 ? "" : "s"}.`;
 
   return (
     <div className="page">
@@ -199,8 +247,8 @@ export default function Instances() {
           <a className="page-nav-link" href="#fleet-list">
             Instance Queue
           </a>
-          <a className="page-nav-link" href="#activity-stream">
-            Activity Stream
+          <a className="page-nav-link" href="#aws-alarm-feed">
+            Alarm Feed
           </a>
         </nav>
 
@@ -229,7 +277,7 @@ export default function Instances() {
               <Link className="shortcut-link" to="/instances?view=alerts">
                 <span>Alert Queue</span>
                 <span className="shortcut-hint">
-                  {alertedInstances.length} flagged
+                  {activeAlarms.length} active
                 </span>
               </Link>
               <Link className="shortcut-link" to="/instances?view=activity">
@@ -273,44 +321,56 @@ export default function Instances() {
 
           <article className="panel compact-panel">
             <div className="panel-header">
-              <div className="panel-title">Alert Spotlight</div>
-              <span className="status-inline">Highest pressure right now</span>
+              <div className="panel-title">Alarm Spotlight</div>
+              <span className="status-inline">Highest priority AWS alarm</span>
             </div>
-            {topAlert ? (
+            {topAlarm ? (
               <div className="spotlight-card">
-                <div className="instance-header">
+                <div className="alarm-header">
                   <div>
-                    <div className="instance-name">{topAlert.name}</div>
-                    <div className="instance-id">{topAlert.id}</div>
+                    <div className="instance-name">{topAlarm.alarmName}</div>
+                    <div className="instance-id">
+                      {formatAlarmTarget(topAlarm)}
+                    </div>
                   </div>
-                  <span className="status-pill" data-state={topAlert.state}>
-                    {topAlert.state}
+                  <span
+                    className="alarm-state-pill"
+                    data-alarm-state={topAlarm.state}
+                  >
+                    {topAlarm.state}
                   </span>
                 </div>
                 <div className="instance-meta">
-                  <div>CPU: {formatPercent(topAlert.cpuPercent)}</div>
-                  <div>Memory: {formatPercent(topAlert.memoryPercent)}</div>
-                  <div>Zone: {topAlert.zone ?? "unknown"}</div>
-                  <div>Updated: {formatAge(topAlert.updatedAt)}</div>
+                  <div>Metric: {topAlarm.metric}</div>
+                  <div>Namespace: {topAlarm.namespace}</div>
+                  <div>Threshold: {formatThreshold(topAlarm.threshold)}</div>
+                  <div>Updated: {formatAge(topAlarm.updatedAt)}</div>
                 </div>
+                {topAlarm.stateReason ? (
+                  <div className="alarm-reason">{topAlarm.stateReason}</div>
+                ) : null}
                 <div className="card-actions">
-                  <Link
-                    className="btn ghost"
-                    to={`/instances/${topAlert.id}#instance-summary`}
-                  >
-                    Summary
-                  </Link>
-                  <Link
-                    className="btn primary"
-                    to={`/instances/${topAlert.id}#cpu-chart`}
-                  >
-                    Open CPU Graph
-                  </Link>
+                  {topAlarm.instanceId ? (
+                    <>
+                      <Link
+                        className="btn ghost"
+                        to={`/instances/${topAlarm.instanceId}#alarm-status`}
+                      >
+                        Alarm Status
+                      </Link>
+                      <Link
+                        className="btn primary"
+                        to={`/instances/${topAlarm.instanceId}#cpu-chart`}
+                      >
+                        Open Instance
+                      </Link>
+                    </>
+                  ) : null}
                 </div>
               </div>
             ) : (
               <div className="cpu-chart-empty compact-empty">
-                No alerting instances are active right now.
+                No active AWS alarms are firing right now.
               </div>
             )}
           </article>
@@ -339,7 +399,7 @@ export default function Instances() {
         ) : null}
 
         {!isLoading && !displayInstances.length ? (
-          <div className="cpu-chart-empty">{error ?? viewCopy.emptyState}</div>
+          <div className="cpu-chart-empty">{emptyQueueText}</div>
         ) : null}
 
         {displayInstances.length ? (
@@ -355,6 +415,15 @@ export default function Instances() {
                     {instance.state}
                   </span>
                 </div>
+                {(activeAlarmCountByInstance.get(instance.id) ?? 0) > 0 ? (
+                  <div className="alarm-inline-badge">
+                    {activeAlarmCountByInstance.get(instance.id)} active AWS
+                    alarm
+                    {activeAlarmCountByInstance.get(instance.id) === 1
+                      ? ""
+                      : "s"}
+                  </div>
+                ) : null}
                 <div className="instance-meta">
                   <div>Type: {instance.type}</div>
                   <div>Zone: {instance.zone ?? "unknown"}</div>
@@ -407,6 +476,72 @@ export default function Instances() {
             ))}
           </div>
         ) : null}
+      </section>
+
+      <section className="panel" id="aws-alarm-feed">
+        <div className="panel-header">
+          <div>
+            <div className="panel-title">AWS Alarm Feed</div>
+            <p className="page-subtitle">
+              CloudWatch metric alarms are sorted with firing alarms first so
+              you can review the AWS signal before drilling into metrics.
+            </p>
+          </div>
+          <div className="status-inline">
+            {sortedAlarms.length} alarm{sortedAlarms.length === 1 ? "" : "s"}
+          </div>
+        </div>
+
+        {sortedAlarms.length ? (
+          <div className="alarm-list">
+            {sortedAlarms.map((alarm) => (
+              <article
+                key={`${alarm.alarmName}-${alarm.updatedAt ?? "unknown"}-${alarm.instanceId ?? "resource"}`}
+                className="alarm-card"
+              >
+                <div className="alarm-header">
+                  <div>
+                    <div className="instance-name">{alarm.alarmName}</div>
+                    <div className="instance-id">{formatAlarmTarget(alarm)}</div>
+                  </div>
+                  <span
+                    className="alarm-state-pill"
+                    data-alarm-state={alarm.state}
+                  >
+                    {alarm.state}
+                  </span>
+                </div>
+                <div className="instance-meta">
+                  <div>Metric: {alarm.metric}</div>
+                  <div>Namespace: {alarm.namespace}</div>
+                  <div>Threshold: {formatThreshold(alarm.threshold)}</div>
+                  <div>Updated: {formatAge(alarm.updatedAt)}</div>
+                </div>
+                {alarm.stateReason ? (
+                  <div className="alarm-reason">{alarm.stateReason}</div>
+                ) : null}
+                <div className="card-actions">
+                  {alarm.instanceId ? (
+                    <Link
+                      className="btn ghost"
+                      to={`/instances/${alarm.instanceId}#alarm-status`}
+                    >
+                      Open Instance
+                    </Link>
+                  ) : (
+                    <span className="status-inline">
+                      No linked EC2 instance
+                    </span>
+                  )}
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="cpu-chart-empty">
+            No CloudWatch alarms were returned by the monitoring API.
+          </div>
+        )}
       </section>
     </div>
   );

@@ -17,12 +17,14 @@ const STATE_COLORS: Record<InstanceState, { bg: string; text: string }> = {
 
 interface InstanceCardProps {
   instance: MonitoringInstance;
+  activeAlarmCount?: number;
   isFavorite?: boolean;
   onToggleFavorite?: (instanceId: string) => void;
 }
 
 export function InstanceCard({
   instance,
+  activeAlarmCount = 0,
   isFavorite = false,
   onToggleFavorite,
 }: InstanceCardProps) {
@@ -99,6 +101,20 @@ export function InstanceCard({
           <Text style={styles.metaValue}>{zoneValue}</Text>
         </View>
       </View>
+
+      {activeAlarmCount > 0 ? (
+        <View style={styles.alarmBadge}>
+          <MaterialCommunityIcons
+            color="#B91C1C"
+            name="bell-alert-outline"
+            size={16}
+          />
+          <Text style={styles.alarmBadgeText}>
+            {activeAlarmCount} active AWS alarm
+            {activeAlarmCount === 1 ? "" : "s"}
+          </Text>
+        </View>
+      ) : null}
 
       <View style={styles.metricsSection}>
         <View style={styles.metricsHeader}>
@@ -207,6 +223,24 @@ const styles = StyleSheet.create({
     paddingTop: 14,
     borderTopWidth: 1,
     borderTopColor: "#EEF2F7",
+  },
+  alarmBadge: {
+    marginTop: 14,
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    borderRadius: 999,
+    backgroundColor: "#FEF2F2",
+    borderWidth: 1,
+    borderColor: "#FECACA",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  alarmBadgeText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#B91C1C",
   },
   metricsHeader: {
     flexDirection: "row",

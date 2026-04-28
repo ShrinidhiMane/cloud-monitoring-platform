@@ -1,215 +1,247 @@
 # Cloud Infrastructure Monitoring
 
-## Overview
+Multi-platform AWS infrastructure monitoring for:
 
-This project is a multi-platform cloud monitoring and protection system built on AWS. The repository currently contains:
+- Web: React + TypeScript (`apps/web`)
+- Mobile: Expo / React Native for Android, iOS, and Expo web (`apps/mobile`)
+- Backend: Express + AWS SDK (`aws/backend`)
+- Shared client/types: TypeScript package (`packages/api-client`)
 
-- Web Application (React + TypeScript) in `apps/web`
-- AWS setup/runbook docs in `docs/`
+The current stack can monitor EC2 instances, show CloudWatch metrics, surface CloudWatch alarms, and send EC2 power actions through the backend API.
 
-Mobile apps (React Native) and a backend API are planned but are not in this repo yet.
+## Repository Layout
 
-The system monitors two EC2 instances:
-- Web Server
-- Database Server
-
-The backend communicates with AWS services using AWS APIs and exposes a unified API contract defined with OpenAPI.
-
----
-
-## Repository Structure (Current)
-
-```
-/apps/web                # Web app (React + TypeScript)
-/docs
-  /aws/sprint1            # AWS setup/runbooks and queries
-  /sprint1-dmehta33       # Additional sprint docs
-  /templates             # Archived templates (e.g., Vite README)
+```text
+apps/
+  mobile/              Expo app for Android, iOS, and web
+  web/                 React + Vite web app
+aws/
+  backend/             Express backend that talks to AWS
+docs/                  Runbooks and project documentation
+packages/
+  api-client/          Shared API client, alarm helpers, and types
 ```
 
----
+## Prerequisites
 
-## System Architecture (Target)
+Install these first on both macOS and Windows:
 
-### High-Level Architecture
+- Node.js 20 or newer
+- npm 10 or newer
+- Git
 
-```
-┌────────────────────────────┐
-│        Web (React)         │
-├────────────────────────────┤
-│   Mobile (React Native)    │
-│   iOS + Android Apps       │
-└──────────────┬─────────────┘
-               │
-        HTTPS (JWT Auth)
-               │
-    ┌──────────▼──────────┐
-    │   Backend API Layer  │
-    │ (OpenAPI Spec Based) │
-    └──────────┬──────────┘
-               │
-  ┌────────────┼────────────┐
-  │            │            │
-AWS EC2    CloudWatch   IAM / Auth
-```
+Platform-specific tools:
 
----
+- macOS:
+  - Xcode if you want to run the iOS simulator or native iOS builds
+  - Android Studio if you want Android emulators
+- Windows:
+  - Android Studio if you want Android emulators
+  - iOS builds are not supported on Windows
 
-## Architecture Components
+AWS access for the backend:
 
-### 1. Frontend Layer
+- The backend uses standard AWS SDK credentials from your shell or AWS profile
+- Reference file: `aws/backend/.env.example`
+- That file is not auto-loaded by the backend runtime
 
-#### Web Application (Implemented)
-- React + TypeScript
-- React Router
-- Environment-based API configuration
-- TanStack Query for data fetching (planned)
-- Role-based UI rendering
+## Download And Install
 
-#### Mobile Applications (Planned)
-- React Native + TypeScript
-- One shared mobile codebase
-- iOS (built with Xcode)
-- Android (built with Android Studio)
-- Secure token storage
-- Native navigation
-- Charts for metrics
-
-Frontend platforms:
-- Consume the same backend API
-- Use the same OpenAPI-generated TypeScript client (planned)
-- Enforce role-based access in the UI
-
-### 2. Backend Layer (External/Planned)
-
-The backend acts as a secure control plane between clients and AWS.
-
-#### Responsibilities
-- Authenticate users
-- Enforce role-based access control (RBAC)
-- Call AWS services via AWS SDK
-- Expose REST endpoints defined by OpenAPI
-
-#### Core AWS Integrations
-- EC2 (start, stop, reboot, status)
-- CloudWatch (CPU, memory, alarms)
-- IAM (secure credential handling)
-
-### 3. Infrastructure Monitoring Scope
-
-The system monitors:
-
-#### EC2 Instance State
-- Running
-- Stopped
-- Pending
-- Terminated
-
-#### Resource Metrics
-- CPU Utilization
-- Network In / Out
-- Memory (if configured via CloudWatch Agent)
-
-#### Protection Features
-- Alarm monitoring
-
----
-
-## Development Strategy (Planned Monorepo)
-
-```
-/apps
-  /web
-  /mobile
-/packages
-  /api-client
-  /shared
-```
-
-#### Shared Components
-- OpenAPI-generated TypeScript client
-- Shared types and models
-- Business logic utilities
-- Auth helpers
-
-#### Platform-Specific
-- Web routing and layout
-- Mobile navigation
-- Push notifications
-- Native permissions
-
----
-
-## Git Workflow & Branching
-
-### Branch Naming Convention
-
-- `main` - Production-ready code
-- `dev` - Integration branch for features
-- `feature/<name>` - New features
-- `bugfix/<name>` - Bug fixes
-
-### Creating a Branch
+### 1. Clone the repository
 
 ```bash
-git checkout dev
-git pull origin dev
-git checkout -b feature/your-feature-name
+git clone <your-repo-url>
+cd SER517-Team5
 ```
 
-### Committing Changes
-
-Use descriptive commit messages following conventional commits:
+### 2. Install workspace dependencies
 
 ```bash
-git add .
-git commit -m "feat: add EC2 instance monitoring dashboard"
-git commit -m "fix: resolve JWT token expiration issue"
-git commit -m "docs: update installation instructions"
+npm run setup
 ```
 
-### Pushing & Pull Requests
+What `npm run setup` does:
 
-```bash
-git push origin feature/your-feature-name
-```
+- Installs root dependencies
+- Installs `apps/web`
+- Installs `apps/mobile`
+- Builds `packages/api-client`
+- Installs `aws/backend`
 
-Then create a Pull Request on GitHub:
-- Link related issues
-- Describe changes clearly
-- Request at least one reviewer
-- Ensure CI/CD passes before merging
+## Environment Setup
 
-### Merging Strategy
-
-- Squash commits for feature branches
-- Merge `dev` into `main` for releases only
-- Delete branch after merging
-
----
-
-## Authentication & Security
-
-- JWT-based authentication
-- Role-based access: Viewer (read-only), Operator (start/stop/reboot), Admin (terminate, manage alarms)
-- No AWS credentials stored on client
-- All AWS calls handled server-side
-
----
-
-## Environment Configuration
-
-### Web Environment Variables
+### Web app
 
 Create `apps/web/.env`:
 
+```env
+VITE_API_URL=http://localhost:5000
 ```
-VITE_API_URL=http://localhost:8080
+
+Use your backend URL instead of `localhost` if the API runs elsewhere.
+
+### Mobile app
+
+The mobile app can use:
+
+- `EXPO_PUBLIC_API_URL` at launch time
+- A saved monitoring URL inside the app's AWS setup flow
+
+For local development, point it at your backend:
+
+- macOS / Linux:
+
+```bash
+export EXPO_PUBLIC_API_URL=http://localhost:5000
 ```
 
-## Setup
+- Windows PowerShell:
 
-Please run `npm run setup` while starting the project
+```powershell
+$env:EXPO_PUBLIC_API_URL="http://localhost:5000"
+```
 
-To Run the Webapp: Please run `npm run dev:client`
+If you run the app on a physical phone, do not use `localhost`. Use your computer's LAN IP, for example `http://192.168.1.25:5000`.
 
+### Backend AWS credentials
+
+Set AWS credentials in the shell before starting the backend.
+
+- macOS / Linux:
+
+```bash
+export AWS_REGION=us-east-2
+export AWS_ACCESS_KEY_ID=your_access_key_id
+export AWS_SECRET_ACCESS_KEY=your_secret_access_key
+export AWS_SESSION_TOKEN=your_session_token
+```
+
+- Windows PowerShell:
+
+```powershell
+$env:AWS_REGION="us-east-2"
+$env:AWS_ACCESS_KEY_ID="your_access_key_id"
+$env:AWS_SECRET_ACCESS_KEY="your_secret_access_key"
+$env:AWS_SESSION_TOKEN="your_session_token"
+```
+
+If you are using long-lived keys without a session token, you can omit `AWS_SESSION_TOKEN`.
+
+## Running The Repository
+
+### Start the backend
+
+From the repo root:
+
+```bash
+npm run start:server
+```
+
+The backend listens on port `5000` by default.
+
+### Start the web app
+
+In a second terminal from the repo root:
+
+```bash
+npm run web:dev
+```
+
+Open the Vite URL shown in the terminal.
+
+### Start the mobile app
+
+In a third terminal from the repo root:
+
+```bash
+npm run dev:mobile
+```
+
+That starts Expo and the shared API client watcher.
+
+Useful mobile launch commands:
+
+- Android:
+
+```bash
+npm run android --prefix apps/mobile
+```
+
+- iOS on macOS only:
+
+```bash
+npm run ios --prefix apps/mobile
+```
+
+- Expo web:
+
+```bash
+npm run web --prefix apps/mobile
+```
+
+Native Expo builds:
+
+- Android native:
+
+```bash
+npm run android:native --prefix apps/mobile
+```
+
+- iOS native on macOS only:
+
+```bash
+npm run ios:native --prefix apps/mobile
+```
+
+## Typical Development Workflow
+
+1. Start the backend with valid AWS credentials.
+2. Set `VITE_API_URL` for the web app.
+3. Set `EXPO_PUBLIC_API_URL` for the mobile app, or save the monitoring URL in-app.
+4. Run the web app with `npm run web:dev`.
+5. Run the mobile app with `npm run dev:mobile`.
+6. Open:
+   - `apps/web` in a browser
+   - `apps/mobile` in Android, iOS, or Expo web
+
+## Common Commands
+
+From the repo root:
+
+```bash
+npm run lint
+npm run lint:webapp
+npm run lint:mobile
+npm run lint:server
+```
+
+## Platform Notes
+
+### macOS
+
+- You can run web, Android, and iOS from one machine
+- Xcode is required for iOS simulator or native iOS builds
+- If Expo Go cannot reach an `http://` backend on iOS, use a native iOS build instead
+
+### Windows
+
+- You can run web and Android from one machine
+- iOS simulator/native iOS builds are not available on Windows
+- Use PowerShell environment variables or the Android emulator's network-accessible backend URL
+
+## Troubleshooting
+
+- If `npm run setup` fails, rerun `npm install` at the root and then rerun `npm run setup`
+- If the web app says `Missing VITE_API_URL env var`, create `apps/web/.env`
+- If the mobile app cannot reach the API, verify `EXPO_PUBLIC_API_URL` or update the saved monitoring profile in the app
+- If a physical device cannot connect, replace `localhost` with your machine's LAN IP
+- If AWS requests fail, verify the shell session that started `npm run start:server` contains valid AWS credentials
+
+## Current Features
+
+- EC2 fleet overview
+- CloudWatch metric history
+- CloudWatch alarm feed
+- Instance-level alarm drilldown
+- EC2 start, stop, and reboot controls
+- Cached monitoring responses on mobile
