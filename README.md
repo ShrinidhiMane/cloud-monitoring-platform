@@ -1,30 +1,52 @@
 # Cloud Infrastructure Monitoring
 
-Multi-platform AWS infrastructure monitoring for:
+A multi-platform AWS infrastructure monitoring tool built by SER517 Team 5. It provides real-time visibility into EC2 instances, CloudWatch metrics, CloudWatch alarms, S3 bucket storage, and security group details — accessible from both a web browser and a native mobile app.
 
-- Web: React + TypeScript (`apps/web`)
-- Mobile: Expo / React Native for Android, iOS, and Expo web (`apps/mobile`)
-- Backend: Express + AWS SDK (`aws/backend`)
-- Shared client/types: TypeScript package (`packages/api-client`)
+- **Web:** React + TypeScript + Vite (`apps/web`)
+- **Mobile:** Expo / React Native for Android and iOS (`apps/mobile`)
+- **Backend:** Express + AWS SDK (`aws/backend`)
+- **Shared client/types:** TypeScript package (`packages/api-client`)
 
-The current stack can monitor EC2 instances, show CloudWatch metrics, surface CloudWatch alarms, and send EC2 power actions through the backend API.
+---
+
+## Features
+
+- **EC2 Fleet Overview** — view all instances with state, type, availability zone, and IP addresses
+- **Live CloudWatch Metrics** — CPU utilization, memory usage (via CloudWatch Agent), network in/out bytes, disk read/write ops
+- **Metric Time Range Selection** — query historical data over 15 minutes, 1 hour, 6 hours, 24 hours, or 7 days
+- **CloudWatch Alarm Feed** — real-time alarm state sorted by severity (ALARM → INSUFFICIENT\_DATA → OK)
+- **Instance-Level Alarm Drilldown** — see which alarms are tied to a specific EC2 instance
+- **S3 Bucket Monitoring** — bucket size (bytes) and object count per bucket via CloudWatch
+- **Security Group Details** — view security groups associated with each instance
+- **EC2 Power Controls** — start, stop, and reboot instances directly from the UI
+- **Overall Health Status** — API response includes a `healthy` / `degraded` status derived from active alarms
+- **Mobile: AWS Setup Profiles** — save and switch between multiple monitoring endpoint configurations
+- **Mobile: Device PIN + Biometric Lock** — 4-digit PIN and Face ID / fingerprint authentication to protect the app locally
+- **Mobile: Offline Metric Caching** — cached monitoring responses for use when the API is unreachable
+- **Mobile: Auto-Refresh** — configurable background polling to keep metrics up to date
+- **Mobile: Favorites** — bookmark frequently accessed instances for quick access
+
+---
 
 ## Repository Layout
 
 ```text
 apps/
-  mobile/              Expo app for Android, iOS, and web
+  mobile/              Expo app for Android, iOS, and Expo web
   web/                 React + Vite web app
 aws/
-  backend/             Express backend that talks to AWS
+  backend/             Express backend that proxies AWS SDK calls
+  sprint*/             Per-sprint AWS validation scripts and notes
 docs/                  Runbooks and project documentation
 packages/
-  api-client/          Shared API client, alarm helpers, and types
+  api-client/          Shared API client, alarm helpers, and TypeScript types
 ```
+
+---
 
 ## Prerequisites
 
-Install these first on both macOS and Windows:
+Install these on both macOS and Windows:
 
 - Node.js 20 or newer
 - npm 10 or newer
@@ -32,41 +54,42 @@ Install these first on both macOS and Windows:
 
 Platform-specific tools:
 
-- macOS:
-  - Xcode if you want to run the iOS simulator or native iOS builds
-  - Android Studio if you want Android emulators
-- Windows:
-  - Android Studio if you want Android emulators
-  - iOS builds are not supported on Windows
+- **macOS:** Xcode (iOS simulator or native iOS builds), Android Studio (Android emulator)
+- **Windows:** Android Studio (Android emulator) — iOS builds are not supported on Windows
 
 AWS access for the backend:
 
-- The backend uses standard AWS SDK credentials from your shell or AWS profile
-- Reference file: `aws/backend/.env.example`
-- That file is not auto-loaded by the backend runtime
+- The backend reads credentials from environment variables (see [Backend AWS Credentials](#backend-aws-credentials) below)
+- Reference file: `aws/backend/.env.example` — this file is a scaffold and is **not** auto-loaded at runtime
 
-## Download And Install
+---
+
+## Installation
 
 ### 1. Clone the repository
 
 ```bash
-git clone <your-repo-url>
-cd SER517-Team5
+git clone https://github.com/kb019/AWS-Monitoring-Android-App.git
+cd AWS-Monitoring-Android-App
 ```
 
-### 2. Install workspace dependencies
+### 2. Install all workspace dependencies
 
 ```bash
 npm run setup
 ```
 
-What `npm run setup` does:
+`npm run setup` will:
 
-- Installs root dependencies
-- Installs `apps/web`
-- Installs `apps/mobile`
-- Builds `packages/api-client`
-- Installs `aws/backend`
+1. Install root dependencies
+2. Install `apps/web`
+3. Install `apps/mobile`
+4. Build `packages/api-client`
+5. Install `aws/backend`
+
+> If `npm run setup` fails, run `npm install` at the repo root first, then retry `npm run setup`.
+
+---
 
 ## Environment Setup
 
@@ -78,60 +101,56 @@ Create `apps/web/.env`:
 VITE_API_URL=http://localhost:5000
 ```
 
-Use your backend URL instead of `localhost` if the API runs elsewhere.
+Replace `localhost` with your backend's address if the API runs elsewhere.
 
 ### Mobile app
 
-The mobile app can use:
+The mobile app resolves the backend URL in two ways:
 
-- `EXPO_PUBLIC_API_URL` at launch time
-- A saved monitoring URL inside the app's AWS setup flow
+- The `EXPO_PUBLIC_API_URL` environment variable set at launch time
+- A saved AWS Setup Profile stored inside the app
 
-For local development, point it at your backend:
-
-- macOS / Linux:
+For local development, export the variable before starting Expo:
 
 ```bash
+# macOS / Linux
 export EXPO_PUBLIC_API_URL=http://localhost:5000
-```
 
-- Windows PowerShell:
-
-```powershell
+# Windows PowerShell
 $env:EXPO_PUBLIC_API_URL="http://localhost:5000"
 ```
 
-If you run the app on a physical phone, do not use `localhost`. Use your computer's LAN IP, for example `http://192.168.1.25:5000`.
+> **Physical device note:** Do not use `localhost`. Use your machine's LAN IP instead (e.g. `http://192.168.1.25:5000`).
 
-### Backend AWS credentials
+### Backend AWS Credentials
 
-Set AWS credentials in the shell before starting the backend.
-
-- macOS / Linux:
+Set these environment variables in the shell before starting the backend:
 
 ```bash
+# macOS / Linux
 export AWS_REGION=us-east-2
 export AWS_ACCESS_KEY_ID=your_access_key_id
 export AWS_SECRET_ACCESS_KEY=your_secret_access_key
-export AWS_SESSION_TOKEN=your_session_token
+
+# Optional: restrict which EC2 instances the backend will return
+export AWS_ALLOWED_INSTANCE_IDS=i-abc123,i-def456
 ```
 
-- Windows PowerShell:
-
 ```powershell
+# Windows PowerShell
 $env:AWS_REGION="us-east-2"
 $env:AWS_ACCESS_KEY_ID="your_access_key_id"
 $env:AWS_SECRET_ACCESS_KEY="your_secret_access_key"
 $env:AWS_SESSION_TOKEN="your_session_token"
 ```
 
-If you are using long-lived keys without a session token, you can omit `AWS_SESSION_TOKEN`.
+---
 
-## Running The Repository
+## Running the Project
 
-### Start the backend
+Start each service in its own terminal from the repo root.
 
-From the repo root:
+### 1. Start the backend
 
 ```bash
 npm run start:server
@@ -139,9 +158,7 @@ npm run start:server
 
 The backend listens on port `5000` by default.
 
-### Start the web app
-
-In a second terminal from the repo root:
+### 2. Start the web app
 
 ```bash
 npm run web:dev
@@ -149,99 +166,141 @@ npm run web:dev
 
 Open the Vite URL shown in the terminal.
 
-### Start the mobile app
-
-In a third terminal from the repo root:
+### 3. Start the mobile app
 
 ```bash
 npm run dev:mobile
 ```
 
-That starts Expo and the shared API client watcher.
+This starts both the shared `api-client` watcher and the Expo dev server.
 
-Useful mobile launch commands:
-
-- Android:
+Additional mobile launch targets:
 
 ```bash
+# Android emulator
 npm run android --prefix apps/mobile
-```
 
-- iOS on macOS only:
-
-```bash
+# iOS simulator (macOS only)
 npm run ios --prefix apps/mobile
-```
 
-- Expo web:
-
-```bash
+# Expo web
 npm run web --prefix apps/mobile
-```
 
-Native Expo builds:
-
-- Android native:
-
-```bash
+# Native Android build (no bundler)
 npm run android:native --prefix apps/mobile
-```
 
-- iOS native on macOS only:
-
-```bash
+# Native iOS build — macOS only
 npm run ios:native --prefix apps/mobile
 ```
 
-## Typical Development Workflow
+---
 
-1. Start the backend with valid AWS credentials.
-2. Set `VITE_API_URL` for the web app.
-3. Set `EXPO_PUBLIC_API_URL` for the mobile app, or save the monitoring URL in-app.
-4. Run the web app with `npm run web:dev`.
-5. Run the mobile app with `npm run dev:mobile`.
-6. Open:
-   - `apps/web` in a browser
-   - `apps/mobile` in Android, iOS, or Expo web
+## API Reference
+
+### `GET /monitoring`
+
+Returns the full monitoring snapshot for all EC2 instances, S3 buckets, security groups, and CloudWatch alarms.
+
+**Query parameters:**
+
+| Parameter | Values | Default | Description |
+|-----------|--------|---------|-------------|
+| `range` | `15m` `1h` `6h` `24h` `7d` | `1h` | Lookback window for metric series data |
+
+**Response shape (abbreviated):**
+
+```json
+{
+  "timestamp": "ISO-8601",
+  "region": "us-east-2",
+  "status": "healthy | degraded",
+  "instances": [ /* EC2 instances with metrics */ ],
+  "s3": [ /* S3 bucket stats */ ],
+  "security": [ /* security group details */ ],
+  "alarms": [ /* CloudWatch alarms sorted by severity */ ]
+}
+```
+
+### `POST /instances/:instanceId/power`
+
+Sends a power action to an EC2 instance.
+
+**Request body:**
+
+```json
+{ "action": "start | stop | reboot" }
+```
+
+### S3 Routes (`aws/backend/routes/s3Routes.js`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/s3/upload` | Upload a file to the configured S3 bucket |
+| `DELETE` | `/s3/:key` | Delete a file from the S3 bucket by key |
+
+S3 routes require `S3_BUCKET` to be set in the environment.
+
+---
 
 ## Common Commands
 
 From the repo root:
 
 ```bash
+# Run all linters
 npm run lint
+
+# Run individual linters
 npm run lint:webapp
 npm run lint:mobile
 npm run lint:server
+
+# Auto-fix lint issues
+npm run lint:fix-web
+npm run lint:fix-mobile
+npm run lint:fix-all
+
+# Run backend tests
+npm run test --prefix aws/backend
 ```
+
+---
+
+## CI / CD
+
+A GitHub Actions workflow (`.github/workflows/test-on-pr.yml`) runs automatically on every pull request. It:
+
+1. Checks out the repo and sets up Node.js 20
+2. Runs `npm run setup` to install all dependencies and build the shared package
+3. Runs `npm run lint` across all workspaces
+4. Runs `npm run test` to execute the backend test suite
+
+---
 
 ## Platform Notes
 
 ### macOS
 
-- You can run web, Android, and iOS from one machine
-- Xcode is required for iOS simulator or native iOS builds
-- If Expo Go cannot reach an `http://` backend on iOS, use a native iOS build instead
+- Web, Android, and iOS can all be run from one machine
+- Xcode is required for iOS simulator and native iOS builds
+- If Expo Go cannot reach an `http://` URL on iOS, use a native iOS build instead
 
 ### Windows
 
-- You can run web and Android from one machine
-- iOS simulator/native iOS builds are not available on Windows
-- Use PowerShell environment variables or the Android emulator's network-accessible backend URL
+- Web and Android can be run from one machine
+- iOS simulator and native iOS builds are not supported
+- Use PowerShell to set environment variables, and point the mobile app at an Android-emulator-accessible backend URL
+
+---
 
 ## Troubleshooting
 
-- If `npm run setup` fails, rerun `npm install` at the root and then rerun `npm run setup`
-- If the web app says `Missing VITE_API_URL env var`, create `apps/web/.env`
-- If the mobile app cannot reach the API, verify `EXPO_PUBLIC_API_URL` or update the saved monitoring profile in the app
-- If a physical device cannot connect, replace `localhost` with your machine's LAN IP
-- If AWS requests fail, verify the shell session that started `npm run start:server` contains valid AWS credentials
-
-## Current Features
-
-- EC2 fleet overview
-- CloudWatch metric history
-- CloudWatch alarm feed
-- Instance-level alarm drilldown
-- EC2 start, stop, and reboot controls
-- Cached monitoring responses on mobile
+| Symptom | Fix |
+|---------|-----|
+| `npm run setup` fails | Run `npm install` at the repo root, then retry `npm run setup` |
+| Web app: `Missing VITE_API_URL env var` | Create `apps/web/.env` with `VITE_API_URL=http://localhost:5000` |
+| Mobile app can't reach the API | Verify `EXPO_PUBLIC_API_URL` or update the saved monitoring profile in-app |
+| Physical device can't connect | Replace `localhost` with your machine's LAN IP address |
+| AWS requests fail (403 / credential errors) | Verify that the shell running `npm run start:server` has valid AWS credentials exported |
+| Memory metrics missing (`memoryUtilization` is `0`) | The CloudWatch Agent must be installed and running on the EC2 instance |
+| S3 metrics missing | Ensure `S3_BUCKET` is set and that the IAM role/user has `s3:GetBucketLocation` and `cloudwatch:GetMetricStatistics` permissions |
